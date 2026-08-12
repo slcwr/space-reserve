@@ -1,0 +1,44 @@
+{
+  "name": "space-reserve",
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/space-reserve",
+
+  "features": {
+    // ベースイメージに JDK 21 が同梱済みなので version は none。Gradle だけ足す。
+    // 日常のビルドは ./gradlew を使うが、wrapper 抜きで叩きたい場面のために入れておく。
+    "ghcr.io/devcontainers/features/java:1": {
+      "version": "none",
+      "installGradle": true
+    },
+    // Testcontainers 用に docker CLI を入れる。socket のマウントは compose.yaml 側。
+    // trixie には moby-cli パッケージが無いため、本家 Docker CE CLI を使う。
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": false
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "vscjava.vscode-java-pack",
+        "vmware.vscode-boot-dev-pack",
+        "vscjava.vscode-gradle",
+        "cweijan.vscode-mysql-client2"
+      ],
+      "settings": {
+        "java.configuration.updateBuildConfiguration": "automatic",
+        "java.import.gradle.wrapper.enabled": true
+      }
+    }
+  },
+
+  "forwardPorts": ["8080", "db:3306"],
+  "portsAttributes": {
+    "8080": { "label": "app" },
+    "db:3306": { "label": "mysql" }
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "remoteUser": "vscode"
+}

@@ -1,0 +1,51 @@
+services:
+  app:
+    # bookworm 系タグは同梱の yarn apt リポジトリの署名鍵が失効しており、
+    # feature 側の apt-get update が落ちる。trixie 系を使う。
+    image: mcr.microsoft.com/devcontainers/java:3-21-trixie
+    command: sleep infinity
+    volumes:
+      - ..:/workspaces/space-reserve:cached
+      # Testcontainers がホストの Docker に兄弟コンテナを立てるための socket。
+      # docker-outside-of-docker feature は docker-host.sock を受け取り、
+      # 権限を合わせた /var/run/docker.sock をコンテナ内に用意する。
+      - /var/run/docker.sock:/var/run/docker-host.sock
+      # 依存の再ダウンロードを避けるため Gradle キャッシュを named volume に逃がす。
+      - gradle-cache:/home/vscode/.gradle
+    environment:
+      GRADLE_USER_HOME: /home/vscode/.gradle
+      # Testcontainers が立てるコンテナはこの app と兄弟関係になるため、
+      # 接続先はコンテナ名ではなくホスト経由になる。その解決先を明示する。
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: space_reserve
+      MYSQL_USER: app
+      MYSQL_PASSWORD: app
+      TZ: Asia/Tokyo
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      # ホスト側の 3306 と衝突しないようずらして公開する（GUI クライアント用）。
+      - "13306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  mysql-data:
+  gradle-cache:

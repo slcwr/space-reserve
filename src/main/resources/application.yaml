@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: space-reserve
+  datasource:
+    # ホスト名 db は .devcontainer/compose.yaml のサービス名。
+    url: jdbc:mysql://db:3306/space_reserve
+    username: app
+    password: app
+  jpa:
+    # スキーマは Hibernate に作らせず、後段でマイグレーションツールに寄せる前提。
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  mvc:
+    problemdetails:
+      # エラー応答を RFC 9457 (application/problem+json) に統一する。
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
