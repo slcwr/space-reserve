@@ -19,7 +19,9 @@ repositories {
 
 dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
-	implementation("org.springframework.boot:spring-boot-starter-data-jpa")
+	// ORM は MyBatis。Boot の BOM 管理外なのでバージョンを明記する。
+	// 4.0 系が Spring Boot 4.0 以上 / Java 17 以上に対応する。
+	implementation("org.mybatis.spring.boot:mybatis-spring-boot-starter:4.0.1")
 	implementation("org.springframework.boot:spring-boot-starter-security")
 	// Boot 3 系では data-redis と spring-session-data-redis の2本が必要だったが、
 	// 4.x ではこの starter 1本にまとまっている。
@@ -33,8 +35,8 @@ dependencies {
 	implementation("org.flywaydb:flyway-mysql")
 	developmentOnly("org.springframework.boot:spring-boot-devtools")
 	runtimeOnly("com.mysql:mysql-connector-j")
+	testImplementation("org.mybatis.spring.boot:mybatis-spring-boot-starter-test:4.0.1")
 	testImplementation("org.springframework.boot:spring-boot-starter-actuator-test")
-	testImplementation("org.springframework.boot:spring-boot-starter-data-jpa-test")
 	testImplementation("org.springframework.boot:spring-boot-starter-flyway-test")
 	testImplementation("org.springframework.boot:spring-boot-starter-security-test")
 	testImplementation("org.springframework.boot:spring-boot-starter-session-data-redis-test")

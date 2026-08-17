@@ -17,15 +17,18 @@ spring:
       # 後で Redis をキャッシュ等と共用したときにキーが混ざらないよう名前空間を切る。
       namespace: space-reserve:session
       flush-mode: on_save
-  jpa:
-    # スキーマは Hibernate に作らせず、後段でマイグレーションツールに寄せる前提。
-    hibernate:
-      ddl-auto: validate
-    open-in-view: false
   mvc:
     problemdetails:
       # エラー応答を RFC 9457 (application/problem+json) に統一する。
       enabled: true
+
+mybatis:
+  # SQL と resultMap は XML に置く。Mapper インターフェースには注釈で SQL を書かない。
+  mapper-locations: classpath:mapper/*.xml
+  configuration:
+    # password_hash → passwordHash。resultMap を書く場合も、これがあると
+    # 素直な対応のカラムを <result> で列挙せずに済む。
+    map-underscore-to-camel-case: true
 
 management:
   endpoints:

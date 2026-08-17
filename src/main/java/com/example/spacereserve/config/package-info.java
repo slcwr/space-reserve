@@ -1,10 +1,13 @@
 /**
- * {@code @Configuration} クラス置き場。
+ * Configuration クラス置き場。
  *
- * <p>CORS、Jackson のカスタマイズ、Spring Security の設定などが増えたらここに置く。
- * 設定値そのものは {@code application.yaml} に書き、{@code @ConfigurationProperties} で
- * 型付きに受けるのを基本とする（{@code @Value} の散在を避けるため）。
+ * CORS、Jackson のカスタマイズなどが増えたらここに置く。設定値そのものは
+ * application.yaml に書き、ConfigurationProperties で型付きに受けるのを基本とする
+ * （Value 注釈の散在を避けるため）。
  *
- * <p>現時点では既定の挙動で足りているため空。
+ * Spring Security の設定は security パッケージに分ける。
+ * 詳細は docs/design/authentication.md の 7 節を参照。
+ *
+ * 現時点では既定の挙動で足りているため空。
  */
 package com.example.spacereserve.config;

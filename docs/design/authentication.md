@@ -2,6 +2,8 @@
 
 未実装。着手前に決めた方針を残したもの。実装時に前提が崩れたら、この文書も同じコミットで直すこと。
 
+実行時に何がどの順で動くかは [authentication-flow.md](authentication-flow.md) に図で示した。
+
 ## 決定事項
 
 | 論点 | 決定 | 却下した案 |
@@ -98,9 +100,9 @@ public record SignUpRequest(
 
 ### 絶対に守ること
 
-- **`User` エンティティの `toString()` に `passwordHash` を含めない。** Lombok の `@Data` や IDE 生成の `toString` をそのまま使うと、エラーログにハッシュが流出する。
+- **`User` モデルの `toString()` に `passwordHash` を含めない。** Lombok の `@Data` や IDE 生成の `toString` をそのまま使うと、エラーログにハッシュが流出する。
 - **`LoginRequest` / `SignUpRequest` の `toString()` を明示的にオーバーライドする。** バリデーション失敗時に Spring がリクエストオブジェクトをログ出力する経路がある。
-- **`spring.jpa.show-sql` を有効にしない。** パラメータバインディングのログにハッシュが乗る。`application.yaml` では現在無効なので、そのまま維持する。
+- **`repository` パッケージのログレベルを本番で `DEBUG` にしない。** MyBatis は Mapper インターフェースと同名のロガーに、実行 SQL と**バインドしたパラメータの実値**を DEBUG で出力する。`INSERT INTO users ... Parameters: ..., {bcrypt}$2a$10$...` の形でハッシュがそのまま乗る。開発環境で一時的に上げるのは構わないが、`application.yaml` に恒久設定として書かないこと。
 - **`UserResponse` にパスワード関連のフィールドを作らない。**
 
 ---
@@ -229,6 +231,7 @@ CREATE TABLE users (
 - **これが最初のマイグレーションになる。** 予約系は `V2` 以降。`reservations.user_id` から `users.id` へ外部キーを張るため、この順序である必要がある。
 - **`enabled` による論理削除。** 退職者をレコード削除すると、その人の過去の予約の外部キーが壊れる。
 - **ログイン失敗回数はテーブルに持たない。** 理由は 8 節を参照。
+- **ORM は MyBatis なので、このスキーマと `User` モデルの整合はアプリが起動時に検証しない。** Hibernate の `ddl-auto: validate` にあたる仕組みが無く、ずれは該当の SQL が走った時点で初めて表面化する。`users` に列を足すときは、このファイル・`domain/User`・`resources/mapper/UserMapper.xml` の3点を同じコミットで揃えること。
 
 ### 将来メール検証を足す場合の移行
 
@@ -248,7 +251,7 @@ ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT TRUE;
 ```
 com.example.spacereserve
 ├── domain/           User, Role(enum)
-├── repository/       UserRepository
+├── repository/       UserMapper（@Mapper インターフェース。SQL は resources/mapper/UserMapper.xml）
 ├── service/          UserService, AuthService
 ├── controller/       AuthController, UserController
 ├── dto/request/      LoginRequest, SignUpRequest, ChangePasswordRequest
@@ -352,7 +355,7 @@ testImplementation("org.springframework.boot:spring-boot-starter-security-test")
 testImplementation("org.springframework.boot:spring-boot-starter-session-data-redis-test")
 ```
 
-いずれも Boot 4.1 の BOM で管理されているためバージョン指定は不要（BOM の実物で確認済み）。Boot 3 系では Redis セッションに `spring-boot-starter-data-redis` と `spring-session-data-redis` の2本が要ったが、4.1 では `spring-boot-starter-session-data-redis` 1本にまとまっている。`build.gradle.kts` の既存コメントが指摘しているとおり、Boot 4 では自動設定が技術ごとのモジュールに分かれているので、必ず starter を経由すること。
+いずれも Boot 4.1 の BOM で管理されているためバージョン指定は不要（BOM の実物で確認済み）。ORM に使う `mybatis-spring-boot-starter` はサードパーティのため BOM の外にあり、こちらだけはバージョンを明記する（`build.gradle.kts` を参照）。Boot 3 系では Redis セッションに `spring-boot-starter-data-redis` と `spring-session-data-redis` の2本が要ったが、4.1 では `spring-boot-starter-session-data-redis` 1本にまとまっている。`build.gradle.kts` の既存コメントが指摘しているとおり、Boot 4 では自動設定が技術ごとのモジュールに分かれているので、必ず starter を経由すること。
 
 メール送信を行わないため `spring-boot-starter-mail` は入れない。あわせて `src/main/resources/templates/` と `static/` は用途が無い（REST API なので画面用テンプレートも静的ファイルも使わない）。
 
@@ -398,7 +401,7 @@ GenericContainer<?> redisContainer() {
 ## 12. 実装順
 
 1. 依存追加（security / session-data-redis）+ `SecurityConfig`（全エンドポイントを一旦保護して動作確認）
-2. `V1__create_users.sql` + `User` + `Role` + `UserRepository`
+2. `V1__create_users.sql` + `User` + `Role` + `UserMapper`（インターフェース + XML）
 3. `AppUserDetails` + `AppUserDetailsService`（**`enabled` チェック順の入れ替え込み**）
 4. `/api/auth/login` `/logout` `/me` + Spring Session / Redis の疎通確認
 5. 401/403 の Problem Details 化（**忘れやすいので独立ステップにする**）
@@ -408,7 +411,7 @@ GenericContainer<?> redisContainer() {
 9. CSRF 設定とフロントとの疎通
 10. ロールベースの認可、その後で予約側の所有者チェック
 
-各段階で `@WithMockUser` を使ったテストを足していけば、Testcontainers の MySQL に対して実際のマイグレーションごと検証できる。
+各段階で `@WithMockUser` を使ったテストを足していけば、Testcontainers の MySQL に対して実際のマイグレーションごと検証できる。Mapper 単体は `@MybatisTest` でも試せるが、**`UserMapper.xml` の SELECT 句とスキーマのずれは起動時に検出されない**ため、実際にクエリを走らせるテストを1本は置くこと。
 
 ---
 
