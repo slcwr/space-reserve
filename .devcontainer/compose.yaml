@@ -22,6 +22,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
   db:
     image: mysql:8.4
@@ -46,6 +48,23 @@ services:
       retries: 30
       start_period: 30s
 
+  redis:
+    image: redis:8.10
+    # セッションの格納先。appendonly を切ると Redis の再起動でセッションが飛び、
+    # 「アプリ再起動でログインが切れない」という導入目的の半分が消える。
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    ports:
+      # db と同様、ホスト側の既定ポートと衝突しないようずらして公開する。
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
 volumes:
   mysql-data:
+  redis-data:
   gradle-cache:

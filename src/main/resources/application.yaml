@@ -6,6 +6,17 @@ spring:
     url: jdbc:mysql://db:3306/space_reserve
     username: app
     password: app
+  data:
+    redis:
+      # ホスト名 redis は .devcontainer/compose.yaml のサービス名。
+      host: redis
+      port: 6379
+  session:
+    timeout: 30m
+    redis:
+      # 後で Redis をキャッシュ等と共用したときにキーが混ざらないよう名前空間を切る。
+      namespace: space-reserve:session
+      flush-mode: on_save
   jpa:
     # スキーマは Hibernate に作らせず、後段でマイグレーションツールに寄せる前提。
     hibernate:

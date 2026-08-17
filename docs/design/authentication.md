@@ -8,8 +8,11 @@
 |---|---|---|
 | 認証方式 | セッション（Cookie）+ Spring Session + Redis | JWT |
 | 資格情報 | 自前でパスワードを保持 | 外部 IdP（OIDC） |
-| ユーザー登録 | 自己サインアップ + メール検証 | 管理者招待 |
+| ユーザー登録 | 自己サインアップ（**メール検証なし**）+ ドメイン許可リスト | 管理者招待 / メール検証あり |
+| パスワードリセット | 管理者による再発行 | メールによる自己リセット |
 | 認可 | ロール（USER / ADMIN）+ Service 層での所有者チェック | `@PreAuthorize` 式による所有者判定 |
+
+**メール送信基盤は初期スコープに含めない。** 理由と引き受けたリスクは 3 節を参照。
 
 ---
 
@@ -22,6 +25,8 @@ JWT の本来の利点は「受け取った側が発行元に問い合わせず�
 セッションなら失効は即座で、Spring Security の既定の経路にそのまま乗る。
 
 引き受けたコストは **CSRF 対策が必要になること**。Cookie は自動送信されるため `CookieCsrfTokenRepository` を使い、フロントから `X-XSRF-TOKEN` ヘッダを返す実装が要る。JWT を `Authorization` ヘッダで送る方式ではこれが不要で、これが JWT 側の実質的な唯一の利点だった。
+
+**`csrf.disable()` は選択肢に入らない。** 「REST API だから CSRF 不要」が成り立つのは認証情報を `Authorization` ヘッダで送る場合だけで、セッション Cookie を選んだ本構成では前提が成立しない。無効化すると「ログイン中のユーザーに罠サイトを踏ませて勝手に予約させる／他人の予約を削除させる」が成立する。
 
 ### Redis に逃がす理由
 
@@ -102,46 +107,38 @@ public record SignUpRequest(
 
 ## 3. ユーザー登録
 
-自己サインアップを採る。管理者招待型と比べてメール送信基盤が初期スコープに入る分、作業量は 2〜3 ステップ増える。
-
-### メール検証が必須である理由
-
-自己サインアップの本質的な問題は、**登録者が「そのメールアドレスの持ち主である」ことを誰も確認していない**点にある。招待型ならこの確認は招待時点で済んでいる。
-
-確認を省くと他人のアドレスで登録できてしまう。予約システムでこれが通ると、他人の名義で会議室を押さえられ、しかも本来の持ち主は**そのアドレスが既に使われているため自分では登録できない**（`uk_users_email` の一意制約）。単なるなりすましではなく、正規ユーザーの締め出しになる。
-
-### フロー
+自己サインアップ。**メール検証は行わない。**
 
 ```
 POST /api/users {email, password, displayName}
-  → 常に 202 Accepted（本文は「確認メールを送信しました」のみ）
+  → 201 Created（登録済みアドレスなら 409 Conflict）
 ```
 
-**成否にかかわらず同じ応答を返す。** ここで「既に登録されています」と 409 を返すと、登録エンドポイントがそのままメールアドレスの在籍確認 API になる。誰でも叩けるため、招待型と違ってこれが現実的な脅威になる。
+`users` に1行 INSERT して終わり。トークンも確認メールも介在しない。
 
-分岐は応答ではなくメールの内容で行う。
+### メール検証を落とした理由
 
-| 状況 | 送るメール |
-|---|---|
-| 未登録 | 検証リンク付きの登録確認メール |
-| 登録済み・検証済み | 「既に登録があります。パスワードをお忘れならこちら」 |
-| 登録済み・**未検証** | 既存レコードのパスワードを新しい入力で上書きし、トークンを再発行して再送 |
+メール送信基盤は認証本体とは別種の作業（SMTP の用意、テンプレート、送信失敗時の扱い、開発時の確認環境）で、これを抱えたまま始めると認証が動くまでの距離が伸びる。**まず動くものを作り、必要になった段階で足す**方針を採った。
 
-3行目がアドレス占拠への対策。**未検証のレコードは「まだ誰のものでもない」と扱い、上書きを許す。** これをしないと、攻撃者が他人のアドレスで登録しただけで本人が永久に登録できなくなる。
+### 引き受けたリスク
 
-あわせて **24時間経過した未検証ユーザーは定期削除する。** Quartz を入れるほどではなく `@Scheduled` で足りる。
+**1. なりすまし登録とアドレス占拠。** 他人のメールアドレスで登録でき、本人はそのアドレスで登録できなくなる（`uk_users_email` の一意制約）。本来これがメール検証の存在理由。社内利用であれば誰がやったか追跡でき、管理者が `enabled=false` にするかアドレスを付け替えれば復旧できるため、運用でカバーできる範囲と判断した。**外部に公開する場合はこの判断が成立しないので、その時点でメール検証を入れること。**
 
-### 検証エンドポイント
+**2. パスワードリセットが管理者運用になる。** 実務上いちばん効く。パスワードを忘れたユーザーは管理者に連絡し、再発行してもらうしかない。利用者が数十人規模なら回るが、規模が増えると管理者の手間が線形に増える。ここが痛くなったらメール検証・リセットを入れる潮時。
 
-```
-POST /api/auth/verify {token}
-```
+**3. メールアドレスの正しさが保証されない。** 打ち間違えたまま登録が通る。後から通知機能（予約リマインダー等）を足すとき、届かないアドレスが混ざった状態から始まることになる。
 
-メールのリンクは検証用フロントページに飛ばし、そこから POST させる。**GET で状態を変更しないこと。** メールクライアントやセキュリティ製品がリンクを先読みして GET を撃つことがあり、ユーザーが踏む前に検証が完了してしまう。
+### 必須の代替対策 — ドメイン許可リスト
 
-### トークンの扱い
+メール検証を落とす以上、**ドメイン許可リストは省略しない。** `@company.co.jp` 以外を弾くだけで、公開エンドポイントへの外部からの無差別登録はほぼ止まる。CAPTCHA を検討する前にこちらを入れること。
 
-`SecureRandom` で 32 バイト生成し、URL-safe Base64 でメールに載せる。**DB には SHA-256 ハッシュのみを保存する。** DB が漏れてもトークンとして使えないようにするため（パスワードと同じ理屈）。検証用の有効期限は 24 時間。
+許可ドメインは `@ConfigurationProperties` で `application.yaml` から型付きで受ける。`config/package-info.java` が示す「`@Value` の散在を避ける」方針に沿う。
+
+### 重複時に 409 を返してよい理由
+
+登録エンドポイントで「そのアドレスは登録済み」と返すと、一般にはメールアドレスの在籍確認 API として使われうる。しかし**ドメイン許可リストにより同一組織のメンバーしか登録できない**ため、漏れる情報にほとんど価値がない。UX が明確になる利点の方が上回るので、素直に 409 を返す。
+
+外部公開に切り替える際は、ここを「常に 202 を返し、分岐はメール本文で行う」方式に改める必要がある。
 
 ---
 
@@ -169,9 +166,15 @@ public UserResponse login(@Valid @RequestBody LoginRequest request,
 
 **`SecurityContextRepository` への保存を自分で書く必要がある。** `formLogin` を使わない代償で、これを忘れるとログインは成功するのにセッションに何も残らず、次のリクエストで 401 になる。最も引っかかりやすい箇所。
 
-### 未検証チェックの順序 — ハマりどころ
+### ユーザー列挙の防止
 
-`AppUserDetails.isEnabled()` を `enabled && emailVerified` にマップするのが自然に見えるが、**そのままだとメールアドレスの在籍確認ができてしまう。** `DaoAuthenticationProvider` は `preAuthenticationChecks`（有効・ロック・期限）を**パスワード照合より先に**実行するため、パスワードが間違っていても未検証アカウントには「無効です」と返り、アドレスの存在が漏れる。
+「メールアドレスが存在しない」と「パスワードが違う」で応答を変えない。`UserDetailsService` が `UsernameNotFoundException` を投げても Spring Security は既定で `BadCredentialsException` に隠蔽する（`hideUserNotFoundExceptions` が既定 true）。**ここを自分で握りつぶさないこと。**
+
+応答時間の差でも漏れるため、厳密にやるならユーザーが存在しない場合もダミーハッシュに対して照合を走らせる。
+
+### `enabled` チェックの順序
+
+`enabled=false`（退職者・管理者による停止）のアカウントは、既定のままだと**パスワード照合より先に弾かれる**。`DaoAuthenticationProvider` が `preAuthenticationChecks`（有効・ロック・期限）を先に走らせるため、パスワードが間違っていても「無効です」と返り、アドレスの存在が漏れる。
 
 有効性チェックをパスワード照合の後ろに移す。
 
@@ -180,13 +183,7 @@ provider.setPreAuthenticationChecks(userDetails -> { /* 何もしない */ });
 provider.setPostAuthenticationChecks(new AccountStatusUserDetailsChecker());
 ```
 
-パスワードが合った相手は既にアドレスとパスワードの両方を知っているので、そこで「メール未検証です」と伝えても追加で漏れる情報はない。この場合は検証メールの再送導線を返す。
-
-### ユーザー列挙の防止
-
-「メールアドレスが存在しない」と「パスワードが違う」で応答を変えない。`UserDetailsService` が `UsernameNotFoundException` を投げても Spring Security は既定で `BadCredentialsException` に隠蔽する（`hideUserNotFoundExceptions` が既定 true）。**ここを自分で握りつぶさないこと。**
-
-応答時間の差でも漏れるため、厳密にやるならユーザーが存在しない場合もダミーハッシュに対して照合を走らせる。
+パスワードが合った相手は既にアドレスとパスワードの両方を知っているので、そこで「アカウントが無効です」と伝えても追加で漏れる情報はない。将来メール検証を入れる場合も、未検証チェックはこの `postAuthenticationChecks` 側に置く。
 
 ---
 
@@ -209,47 +206,38 @@ provider.setPostAuthenticationChecks(new AccountStatusUserDetailsChecker());
 
 ## 6. データモデル
 
+認証のためのテーブルは `users` 1本。メール検証を行わないためトークンテーブルは不要。
+
 ```sql
 -- V1__create_users.sql
 CREATE TABLE users (
-  id             BIGINT       NOT NULL AUTO_INCREMENT,
-  email          VARCHAR(255) NOT NULL,
-  password_hash  VARCHAR(255) NOT NULL,
-  display_name   VARCHAR(100) NOT NULL,
-  role           VARCHAR(20)  NOT NULL,   -- USER / ADMIN
-  email_verified BOOLEAN      NOT NULL DEFAULT FALSE,
-  enabled        BOOLEAN      NOT NULL DEFAULT TRUE,
-  created_at     DATETIME(6)  NOT NULL,
-  updated_at     DATETIME(6)  NOT NULL,
+  id            BIGINT       NOT NULL AUTO_INCREMENT,
+  email         VARCHAR(255) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  display_name  VARCHAR(100) NOT NULL,
+  role          VARCHAR(20)  NOT NULL,   -- USER / ADMIN
+  enabled       BOOLEAN      NOT NULL DEFAULT TRUE,
+  created_at    DATETIME(6)  NOT NULL,
+  updated_at    DATETIME(6)  NOT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uk_users_email (email)
 );
 ```
 
-```sql
--- V2__create_user_tokens.sql
-CREATE TABLE user_tokens (
-  id         BIGINT       NOT NULL AUTO_INCREMENT,
-  user_id    BIGINT       NOT NULL,
-  purpose    VARCHAR(30)  NOT NULL,   -- EMAIL_VERIFICATION / PASSWORD_RESET
-  token_hash CHAR(64)     NOT NULL,   -- 生トークンは保存しない
-  expires_at DATETIME(6)  NOT NULL,
-  used_at    DATETIME(6)  NULL,
-  created_at DATETIME(6)  NOT NULL,
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_user_tokens_hash (token_hash),
-  KEY idx_user_tokens_user_purpose (user_id, purpose),
-  CONSTRAINT fk_user_tokens_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-);
-```
-
 補足：
 
-- **これが最初のマイグレーションになる。** 予約系は `V3` 以降。`reservations.user_id` から `users.id` へ外部キーを張るため、この順序である必要がある。
+- **これが最初のマイグレーションになる。** 予約系は `V2` 以降。`reservations.user_id` から `users.id` へ外部キーを張るため、この順序である必要がある。
 - **`enabled` による論理削除。** 退職者をレコード削除すると、その人の過去の予約の外部キーが壊れる。
-- **メール検証用とパスワードリセット用のトークンを1テーブルに相乗りさせている。** ハッシュ保存・期限・使用済み記録というライフサイクルが同一のため。
-- **`ON DELETE CASCADE`** は、未検証ユーザーの定期削除でトークンごと消えるようにするため。
 - **ログイン失敗回数はテーブルに持たない。** 理由は 8 節を参照。
+
+### 将来メール検証を足す場合の移行
+
+```sql
+-- DEFAULT TRUE で追加すること
+ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT TRUE;
+```
+
+**`DEFAULT FALSE` で追加すると既存ユーザー全員が未検証扱いになり、一斉にログインできなくなる。** `TRUE` で追加して既存を検証済みとみなし、以降の新規登録だけ `false` で作る。
 
 ---
 
@@ -259,11 +247,11 @@ CREATE TABLE user_tokens (
 
 ```
 com.example.spacereserve
-├── domain/           User, Role(enum), UserToken, TokenPurpose(enum)
-├── repository/       UserRepository, UserTokenRepository
-├── service/          UserService, AuthService, MailService
+├── domain/           User, Role(enum)
+├── repository/       UserRepository
+├── service/          UserService, AuthService
 ├── controller/       AuthController, UserController
-├── dto/request/      LoginRequest, SignUpRequest, VerifyRequest, ...
+├── dto/request/      LoginRequest, SignUpRequest, ChangePasswordRequest
 ├── dto/response/     UserResponse
 └── security/         ★新規
     ├── SecurityConfig                    SecurityFilterChain, PasswordEncoder
@@ -287,6 +275,7 @@ com.example.spacereserve
 |---|---|---|---|
 | `BadCredentialsException` | ログイン Controller 内 | `GlobalExceptionHandler` | 401 |
 | `TooManyAttemptsException`（自作） | ログイン Service 内 | `GlobalExceptionHandler` | 429 |
+| `DuplicateEmailException`（自作） | 登録 Service 内 | `GlobalExceptionHandler` | 409 |
 | `ForbiddenOperationException`（自作） | 各 Service の所有者チェック | `GlobalExceptionHandler` | 403 |
 | 未認証で保護リソースへアクセス | `ExceptionTranslationFilter` | `AuthenticationEntryPoint` | 401 |
 | ロール不足（`/api/admin/**` 等） | 同上 | `AccessDeniedHandler` | 403 |
@@ -294,8 +283,6 @@ com.example.spacereserve
 **フィルタ層の 401/403 は `GlobalExceptionHandler` を通らない。** `@RestControllerAdvice` は DispatcherServlet 内部の例外しか拾えないが、保護リソースへの未認証アクセスはその手前のサーブレットフィルタで弾かれる。放置すると、Problem Details に統一したはずの応答のうち 401/403 だけが Spring 既定の別形式で返る。`security/` に置く `ProblemAuthenticationEntryPoint` / `ProblemAccessDeniedHandler` はこれを揃えるためのもので、省略できない。
 
 **所有者チェックには Spring の `AccessDeniedException` を使わず自作例外を投げる。** `AccessDeniedException` を `@RestControllerAdvice` で捕まえると、`ExceptionTranslationFilter` が持つ「未認証ユーザーなら 403 ではなく 401 を返してログインへ誘導する」という分岐を横取りしてしまい、未ログイン時の挙動が壊れる。層ごとに例外の種類を分けておけばこの衝突が起きない。
-
-**登録時の重複を 409 で返さない。** 3 節のとおり常に 202 を返す。
 
 既存の `handleValidationFailure` が `errors` プロパティに項目別のマップを詰める形式は、登録フォームのバリデーションでもそのまま使える。
 
@@ -321,11 +308,10 @@ KEY  login:fail:{emailHash}:{ip}   TTL 15m
 
 ### 登録スパム
 
-自己サインアップは公開エンドポイントなので、ボットに叩かれる前提が要る。
+自己サインアップは公開エンドポイントなので、ボットに叩かれる前提が要る。**メール検証という関門が無い分、この2つが実質的な防御線になる。**
 
+- **ドメイン許可リスト** — 3 節のとおり必須。これが最も効く。
 - **IP 単位のレート制限** — 1 IP あたり 1時間に数件で十分。
-- **メール送信自体のレート制限** — 同一アドレスへの再送は 60 秒間隔以上に。制限しないと、登録エンドポイントが第三者へのメール爆撃に使え、自分たちの送信ドメインの評判にも跳ね返る。
-- **ドメイン許可リスト** — 社内利用が前提ならこれが最も効く。`@ConfigurationProperties` で許可ドメインを `application.yaml` から型付きで受ける。CAPTCHA を検討する前にまずこちらを検討すること。
 
 ---
 
@@ -339,11 +325,15 @@ KEY  login:fail:{emailHash}:{ip}   TTL 15m
 
 ### リセット（パスワード忘れ）
 
-トークン基盤（`user_tokens`）とメール送信がメール検証で揃うため、追加コストは小さい。
+**管理者による再発行のみ。** メール送信基盤が無いため、利用者による自己リセットは提供しない。
 
-- 有効期限 30分〜1時間、`used_at` で使用済みを潰す。
-- **未登録のアドレスに対しても成功応答を返す。** そうしないと在籍確認に使える。
-- リセット完了時に既存セッションを全て無効化する。
+```
+POST /api/admin/users/{id}/reset-password  → 一時パスワードを応答で返す
+```
+
+管理者が一時パスワードを口頭なり別経路なりで本人に伝える運用。再発行時は当該ユーザーの既存セッションを全て無効化し、初回ログイン時に変更を促す。
+
+この運用が回らなくなったら、メール検証とセルフリセットを入れる（「将来の検討事項」を参照）。
 
 ### 同時ログイン数の制御（任意）
 
@@ -358,37 +348,32 @@ KEY  login:fail:{emailHash}:{ip}   TTL 15m
 ```kotlin
 implementation("org.springframework.boot:spring-boot-starter-security")
 implementation("org.springframework.boot:spring-boot-starter-session-data-redis")
-implementation("org.springframework.boot:spring-boot-starter-mail")
 testImplementation("org.springframework.boot:spring-boot-starter-security-test")
 testImplementation("org.springframework.boot:spring-boot-starter-session-data-redis-test")
-testImplementation("org.springframework.boot:spring-boot-starter-mail-test")
 ```
 
 いずれも Boot 4.1 の BOM で管理されているためバージョン指定は不要（BOM の実物で確認済み）。Boot 3 系では Redis セッションに `spring-boot-starter-data-redis` と `spring-session-data-redis` の2本が要ったが、4.1 では `spring-boot-starter-session-data-redis` 1本にまとまっている。`build.gradle.kts` の既存コメントが指摘しているとおり、Boot 4 では自動設定が技術ごとのモジュールに分かれているので、必ず starter を経由すること。
+
+メール送信を行わないため `spring-boot-starter-mail` は入れない。あわせて `src/main/resources/templates/` と `static/` は用途が無い（REST API なので画面用テンプレートも静的ファイルも使わない）。
 
 ### Compose に追加するサービス
 
 ```yaml
   redis:
-    image: redis:8        # 確認したパッチタグまで固定する
+    image: redis:8.10
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
+    ports:
+      - "16379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
-
-  mailpit:
-    image: axllent/mailpit:latest   # 同上、実際のタグに固定する
-    ports:
-      - "18025:8025"   # Web UI
 ```
 
-`app` の `depends_on` に `redis: {condition: service_healthy}` を追加し、`volumes:` に `redis-data:` を足す。ホストへの公開は MySQL を 13306 にずらしているのと同じ方針（Redis を見たければ `16379:6379`）。
-
-メールは開発中 mailpit が受けて捨てるため外部へ出ない。`spring.mail.host: mailpit` / `port: 1025` を向ける。
+`app` の `depends_on` に `redis: {condition: service_healthy}` を追加し、`volumes:` に `redis-data:` を足す。ホストへの公開は MySQL を 13306 にずらしているのと同じ方針。
 
 ### Testcontainers
 
@@ -398,36 +383,30 @@ testImplementation("org.springframework.boot:spring-boot-starter-mail-test")
 @Bean
 @ServiceConnection("redis")
 GenericContainer<?> redisContainer() {
-    return new GenericContainer<>(DockerImageName.parse("redis:8"))
-            .withExposedPorts(6379);
+    return new GenericContainer<>(DockerImageName.parse("redis:8.10")).withExposedPorts(6379);
 }
 ```
 
 `@ServiceConnection` に `"redis"` を渡すのは、`GenericContainer` からは接続の種類を推論できないため（`MySQLContainer` は型から自明なので引数不要）。追加依存は不要でコアの `testcontainers` に含まれる。
 
-> **未検証**：この配線は Boot 4.1 の data-redis 自動設定モジュール側の実装に依存する。該当 jar が手元に無く確認できていないため、実装時に最初の `contextLoads` テストで疎通を確かめること。
+**この配線は実機で確認済み。** `LettuceConnectionFactory` の解決先がコンテナのマッピングポートと一致し、`PING` が通ること、セッションの実装が `RedisSessionRepository` になることを確認した。
 
 テストが `@SpringBootTest` のたびに MySQL と Redis の2コンテナを起動するようになるため、実行時間は延びる。気になったら Testcontainers の再利用（`.withReuse(true)`）を検討する。
-
-### メールテンプレート
-
-HTML メールを Thymeleaf で組むなら `src/main/resources/templates/` を使う。REST API なので画面用テンプレートは不要だが、この用途で残る。`src/main/resources/static/` は使わない。
 
 ---
 
 ## 12. 実装順
 
-1. 依存追加（security / session-data-redis / mail）+ `SecurityConfig`（全エンドポイントを一旦保護して動作確認）
+1. 依存追加（security / session-data-redis）+ `SecurityConfig`（全エンドポイントを一旦保護して動作確認）
 2. `V1__create_users.sql` + `User` + `Role` + `UserRepository`
-3. `AppUserDetails` + `AppUserDetailsService`（**認証チェック順の入れ替え込み**）
+3. `AppUserDetails` + `AppUserDetailsService`（**`enabled` チェック順の入れ替え込み**）
 4. `/api/auth/login` `/logout` `/me` + Spring Session / Redis の疎通確認
 5. 401/403 の Problem Details 化（**忘れやすいので独立ステップにする**）
-6. Compose に mailpit + メール送信の土台
-7. `V2__create_user_tokens.sql` + ユーザー登録 + メール検証
-8. レート制限（Redis）+ 未検証ユーザーの定期削除
-9. パスワード変更・リセット
-10. CSRF 設定とフロントとの疎通
-11. ロールベースの認可、その後で予約側の所有者チェック
+6. ユーザー登録 + ドメイン許可リスト
+7. レート制限（Redis）
+8. パスワード変更 + 管理者によるパスワード再発行
+9. CSRF 設定とフロントとの疎通
+10. ロールベースの認可、その後で予約側の所有者チェック
 
 各段階で `@WithMockUser` を使ったテストを足していけば、Testcontainers の MySQL に対して実際のマイグレーションごと検証できる。
 
@@ -437,6 +416,7 @@ HTML メールを Thymeleaf で組むなら `src/main/resources/templates/` を�
 
 いずれも初期スコープ外。必要になった時点で判断する。
 
+- **メール検証とセルフパスワードリセット** — 最有力。管理者によるパスワード再発行の手間が無視できなくなったとき、あるいは外部公開に踏み切るときが導入時期。`spring-boot-starter-mail` + 開発用の mailpit、`user_tokens` テーブル（`purpose` で検証用とリセット用を相乗り）、`users.email_verified` の追加（**必ず `DEFAULT TRUE`**、6 節参照）がセットで必要になる。
 - **漏洩パスワード照合**（Have I Been Pwned Range API）— ポリシー強化として最も費用対効果が高い。
 - **多要素認証（TOTP）** — 自前パスワード管理を続けるなら、いずれ必要になる。
 - **外部 IdP（OIDC）への移行** — 運用が重くなったら。`security/` パッケージを分離してあるのは、この移行の変更範囲を閉じ込めるため。
