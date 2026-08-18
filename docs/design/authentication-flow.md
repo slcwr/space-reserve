@@ -9,11 +9,12 @@
 
 ```mermaid
 flowchart LR
-    subgraph client["ブラウザ / フロント"]
+    subgraph client["ブラウザ（React / 同一オリジン）"]
         B["SESSION Cookie<br/>XSRF-TOKEN Cookie"]
     end
 
     subgraph app["Spring Boot アプリ"]
+        STC["static/<br/>React ビルド成果物"]
         SRF["SessionRepositoryFilter<br/>(Spring Session)"]
         SEC["springSecurityFilterChain<br/>(フィルタ群)"]
         DS["DispatcherServlet"]
@@ -25,17 +26,19 @@ flowchart LR
     RDS[("Redis<br/>セッション / レート制限")]
     DB[("MySQL<br/>users, reservations")]
 
-    B -->|HTTP| SRF --> SEC --> DS --> CTL --> SVC --> REPO
+    B -->|"/api/**"| SRF --> SEC --> DS --> CTL --> SVC --> REPO
+    B -->|"それ以外（permitAll）"| STC
     SRF <-->|セッション読み書き| RDS
     SEC -->|認証情報の復元| RDS
     SVC -->|試行回数 INCR| RDS
     REPO --> DB
 ```
 
-要点は2つ。
+要点は3つ。
 
 - **`SessionRepositoryFilter` は Security のフィルタ群より手前にいる。** Spring Session が `HttpServletRequest` を差し替えるので、以降の `getSession()` は全て Redis を向く。Security 側は自分が Redis を見ていることを知らない。
 - **Redis は3用途を兼ねる**（セッション / ログイン失敗カウント / 登録レート制限）。だから `namespace` を明示する。
+- **React は同一オリジンで配信し、`/api/**` 以外は認証を通さず `static/` へ抜ける。** ブラウザから見たオリジンが1つなので CORS は登場しない。詳細は 10 節。
 
 ---
 
@@ -179,17 +182,21 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as クライアント
+    participant C as React (axios)
     participant CF as CsrfFilter
+    participant H as CsrfTokenRequestHandler
     participant Repo as CookieCsrfTokenRepository
     participant Ctl as Controller
 
-    Note over C,Repo: 初回 GET
+    Note over C,Repo: 初回 GET — Cookie を発行させる
     C->>CF: GET /api/me
-    CF->>Repo: トークン生成
-    Repo-->>C: Set-Cookie: XSRF-TOKEN=abc（HttpOnly=false）
+    CF->>H: トークンを解決
+    Note over H: 既定は遅延解決。<br/>setCsrfRequestAttributeName(null) で<br/>毎回解決させる
+    H->>Repo: 生成して保存
+    Repo-->>C: Set-Cookie: XSRF-TOKEN=abc<br/>（withHttpOnlyFalse → JS から読める）
 
     Note over C,Ctl: 以降の更新系
+    C->>C: axios が Cookie を読み<br/>X-XSRF-TOKEN に載せる
     C->>CF: POST /api/reservations<br/>Cookie: SESSION, XSRF-TOKEN=abc<br/>Header: X-XSRF-TOKEN: abc
     CF->>Repo: Cookie 側の値を取得
     CF->>CF: ヘッダ値と比較
@@ -201,7 +208,11 @@ sequenceDiagram
     end
 ```
 
-罠サイトはクロスオリジンのため **Cookie は自動送信できてもその値を JS から読んでヘッダに載せることができない**。この非対称性が防御の本体。したがってフロントは「Cookie を読んでヘッダに詰め直す」実装が必須になる。
+図では不一致を 403 としているが、**これは認証済みの場合**。`CsrfFilter` が投げる `AccessDeniedException` も `ExceptionTranslationFilter` の分岐を通るため、未ログイン状態で CSRF に弾かれると 401 になる（6 節）。実機でも「トークン無し → 401 / 正しいトークン → 通過」という形で観測できる。
+
+罠サイトはクロスオリジンのため **Cookie は自動送信できてもその値を JS から読んでヘッダに載せることができない**。この非対称性が防御の本体。したがってフロントは「Cookie を読んでヘッダに詰め直す」実装が必須になる（`axios` は既定でこれを行う）。
+
+**Spring Security 側の設定を2つとも入れないと、この図の1つ目のやりとりが成立しない。** `withHttpOnlyFalse()` が無ければ JS が Cookie を読めず、遅延解決を解除しなければそもそも `Set-Cookie` が飛ばない。実装では両方をまとめた `csrf(CsrfConfigurer::spa)` を使っている。どちらを落としても「ログイン画面は出るのに POST だけ 403」という同じ症状になる。詳細は authentication.md 12 節。
 
 ---
 
@@ -321,7 +332,38 @@ sequenceDiagram
 
 ---
 
+## 10. 同一オリジン構成でのリクエストの行き先
+
+React は同一オリジンで配信する。ブラウザから見えるオリジンは開発・本番のどちらでも1つで、CORS は登場しない。
+
+```mermaid
+flowchart TD
+    subgraph dev["開発"]
+        D1["ブラウザ<br/>localhost:5173"] --> D2["Vite dev server"]
+        D2 -->|"/api/**"| D3["proxy → localhost:8080"]
+        D2 -->|"それ以外"| D4["React を HMR で配信"]
+    end
+
+    subgraph prod["本番"]
+        P1["ブラウザ<br/>単一ホスト"] --> P2["Spring Boot"]
+        P2 -->|"/api/**"| P3["DispatcherServlet → Controller"]
+        P2 -->|"/assets/**, /favicon.ico"| P4["static/ の実ファイル"]
+        P2 -->|"それ以外の未知パス"| P5["index.html<br/>（SPA フォールバック）"]
+    end
+
+    style D3 fill:#1e3a5f,color:#fff
+    style P3 fill:#1e3a5f,color:#fff
+```
+
+分岐で外してはいけない点が2つ。
+
+- **`/api/**` を SPA フォールバックの対象に含めない。** 含めると存在しない API パスが 404 ではなく `index.html` を返し、フロントは JSON を期待して HTML を受け取る。原因の追いにくい壊れ方をする。
+- **`/`・`/assets/**` は `permitAll` にする。** 全部を `authenticated()` にすると `GET /` が 401 になり、ログイン画面にすら到達できない。保護は API 側だけで完結している。
+
+---
+
 ## 参照
 
 - 判断の根拠・却下した案・引き受けたリスク → [authentication.md](authentication.md)
-- 実装順 → 同 12 節
+- フロントとの接続（CSRF 設定・認可・フォールバック）→ 同 12 節
+- 実装順 → 同 13 節

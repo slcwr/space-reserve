@@ -13,6 +13,7 @@
 | ユーザー登録 | 自己サインアップ（**メール検証なし**）+ ドメイン許可リスト | 管理者招待 / メール検証あり |
 | パスワードリセット | 管理者による再発行 | メールによる自己リセット |
 | 認可 | ロール（USER / ADMIN）+ Service 層での所有者チェック | `@PreAuthorize` 式による所有者判定 |
+| フロントとの配置 | React を**同一オリジン**で配信（開発は Vite の proxy、本番は Spring から静的配信） | 別オリジン + CORS |
 
 **メール送信基盤は初期スコープに含めない。** 理由と引き受けたリスクは 3 節を参照。
 
@@ -26,7 +27,7 @@ JWT の本来の利点は「受け取った側が発行元に問い合わせず�
 
 セッションなら失効は即座で、Spring Security の既定の経路にそのまま乗る。
 
-引き受けたコストは **CSRF 対策が必要になること**。Cookie は自動送信されるため `CookieCsrfTokenRepository` を使い、フロントから `X-XSRF-TOKEN` ヘッダを返す実装が要る。JWT を `Authorization` ヘッダで送る方式ではこれが不要で、これが JWT 側の実質的な唯一の利点だった。
+引き受けたコストは **CSRF 対策が必要になること**。Cookie は自動送信されるため `CookieCsrfTokenRepository` を使い、フロントから `X-XSRF-TOKEN` ヘッダを返す実装が要る。JWT を `Authorization` ヘッダで送る方式ではこれが不要で、これが JWT 側の実質的な唯一の利点だった。具体的な設定は 12 節。
 
 **`csrf.disable()` は選択肢に入らない。** 「REST API だから CSRF 不要」が成り立つのは認証情報を `Authorization` ヘッダで送る場合だけで、セッション Cookie を選んだ本構成では前提が成立しない。無効化すると「ログイン中のユーザーに罠サイトを踏ませて勝手に予約させる／他人の予約を削除させる」が成立する。
 
@@ -357,7 +358,7 @@ testImplementation("org.springframework.boot:spring-boot-starter-session-data-re
 
 いずれも Boot 4.1 の BOM で管理されているためバージョン指定は不要（BOM の実物で確認済み）。ORM に使う `mybatis-spring-boot-starter` はサードパーティのため BOM の外にあり、こちらだけはバージョンを明記する（`build.gradle.kts` を参照）。Boot 3 系では Redis セッションに `spring-boot-starter-data-redis` と `spring-session-data-redis` の2本が要ったが、4.1 では `spring-boot-starter-session-data-redis` 1本にまとまっている。`build.gradle.kts` の既存コメントが指摘しているとおり、Boot 4 では自動設定が技術ごとのモジュールに分かれているので、必ず starter を経由すること。
 
-メール送信を行わないため `spring-boot-starter-mail` は入れない。あわせて `src/main/resources/templates/` と `static/` は用途が無い（REST API なので画面用テンプレートも静的ファイルも使わない）。
+メール送信を行わないため `spring-boot-starter-mail` は入れない。`src/main/resources/templates/` も用途が無い（サーバ側で HTML を組み立てないため）。`static/` は React のビルド成果物の置き場として使う（12 節）。
 
 ### Compose に追加するサービス
 
@@ -398,7 +399,116 @@ GenericContainer<?> redisContainer() {
 
 ---
 
-## 12. 実装順
+## 12. フロントエンド（React）との接続
+
+**同一オリジンで配信する。** 別オリジン + CORS は採らない。
+
+セッション Cookie を選んだ時点で、オリジンを分ける代償は JWT 構成より高くつく。CORS 設定、`SameSite=None` に伴う開発環境での HTTPS 必須化、preflight の扱いがすべて追加され、得られるものが無い。
+
+### 配置
+
+```
+frontend/                       React + Vite（リポジトリ直下）
+  └─ dist/  ─── ビルド ───→  src/main/resources/static/
+```
+
+| | 開発 | 本番 |
+|---|---|---|
+| 配信 | Vite dev server `:5173` | Spring が `static/` から配信 |
+| API | Vite の `server.proxy` で `/api` → `:8080` へ中継 | 同一ホストの `/api` |
+| ブラウザから見たオリジン | 単一（`:5173`） | 単一 |
+
+開発でも proxy を挟むことで**ブラウザから見たオリジンが常に1つになる**のが要点。これにより CORS 設定は開発・本番のどちらでも不要になり、Cookie の `SameSite` は既定の `Lax` のままでよい。
+
+```ts
+// vite.config.ts
+server: {
+  proxy: { '/api': 'http://localhost:8080' }
+}
+```
+
+### CSRF の設定
+
+```java
+http.csrf(CsrfConfigurer::spa);
+```
+
+`spa()` は Spring Security 7.1 で入った SPA 向けのプリセットで、中身は
+`CookieCsrfTokenRepository.withHttpOnlyFalse()` と、`setCsrfRequestAttributeName(null)` を
+施したリクエストハンドラの2点（実物のバイトコードで確認済み）。手で書くなら次と等価になる。
+
+```java
+// spa() が無い版（Spring Security 7.0 以前）
+http.csrf(csrf -> {
+    csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse());
+    // Spring Security 6 以降の遅延読み込みを解除する
+    var handler = new CsrfTokenRequestAttributeHandler();
+    handler.setCsrfRequestAttributeName(null);
+    csrf.csrfTokenRequestHandler(handler);
+});
+```
+
+厳密には `spa()` の方が一段良い。ヘッダ経由のトークンは素の値で照合しつつ、
+レスポンスに載せる側は `XorCsrfTokenRequestAttributeHandler` のままにするため、
+BREACH 対策のマスクを捨てずに済む。上の手書き版は両方とも素の値になる。
+
+**内訳の2つは、どちらを落としても成立しない。**
+
+- **`withHttpOnlyFalse()`** — 既定では `HttpOnly` が付き、JS から Cookie を読めない。読めなければ `X-XSRF-TOKEN` ヘッダに載せ直せないので、CSRF の仕組みそのものが成立しない。
+- **遅延読み込みの解除** — Spring Security 6 以降、CSRF トークンは誰かがアクセスするまで解決されない。何もしないと `Set-Cookie: XSRF-TOKEN` が飛ばず、フロントは永遠にトークンを取得できない。`setCsrfRequestAttributeName(null)` で毎リクエスト解決に戻す。
+
+「ログイン画面までは表示できるのに、ログインの POST だけが 403 になる」という形で表面化する。原因が CSRF だと気づきにくい。
+
+### 静的リソースの認可設定
+
+```java
+http.authorizeHttpRequests(auth -> auth
+    .requestMatchers("/", "/index.html", "/favicon.ico", "/assets/**").permitAll()
+    .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+    .requestMatchers(HttpMethod.POST, "/api/auth/login", "/api/users").permitAll()
+    .requestMatchers("/api/admin/**").hasRole("ADMIN")
+    .anyRequest().authenticated());
+```
+
+**SPA のシェル自体を `permitAll` にすること。** 全部を `authenticated()` にすると `GET /` が 401 を返し、ログイン画面にすら到達できない。「認証が必要かどうか」の判断はフロントが 401 応答を見て行う（後述）ので、HTML と JS の配信自体は保護しない。中身の保護は API 側で完結している。
+
+**公開する API はメソッドまで絞る。** `/api/users` をパスだけで `permitAll` にすると、後から `GET /api/users`（利用者一覧）を生やした瞬間に無認証で読めるようになる。開けたいのは登録の POST だけなので、その時点で絞っておく。
+
+`/actuator/health` を開けているのは、Compose のヘルスチェックと 1 節の「Redis のヘルスが載ることを確認する」ため。`/actuator/info` は開けない。
+
+### ブラウザ向け既定挙動の無効化
+
+Spring Security の既定はサーバサイドレンダリングの画面を前提にしているため、そのままだとフロントに HTML やリダイレクトが返る。REST として振る舞わせるために次を外す・差し替える。
+
+| 対象 | 既定 | 本構成 |
+|---|---|---|
+| `formLogin` | `/login` の画面と POST 処理 | 無効化（ログインは 4 節の Controller） |
+| `httpBasic` | `WWW-Authenticate` でブラウザのダイアログ | 無効化 |
+| `requestCache` | 401 になった元リクエストをセッションに保存 | 無効化（ログイン後に元 URL へ戻す動線が無い） |
+| `AuthenticationEntryPoint` | ログイン画面へ 302 | ステータスのみ返す（最終的には 8 節の Problem Details 版） |
+| ログアウト成功 | `/login?logout` へ 302 | 204 |
+
+`requestCache` を切るのは、使わない `SavedRequest` をセッションに積まないため。Redis に載る以上、不要なものは置かない。
+
+### SPA フォールバック
+
+クライアントサイドルーティングを使うため、`/reservations/42` を直接開いたりリロードしたりしたときに `index.html` を返す設定が要る。
+
+**`/api/**` をフォールバックの対象に含めないこと。** 含めると存在しない API パスが 404 ではなく `index.html` を返し、フロントは JSON を期待して HTML を受け取る。「なぜか JSON パースエラーになる」という追いにくい壊れ方をする。
+
+### フロント側の約束
+
+- **HTTP クライアントは `axios` を使う。** `XSRF-TOKEN` Cookie を読んで `X-XSRF-TOKEN` ヘッダに載せる処理を既定で持っている。`fetch` だと毎回自前で書くことになる。同一オリジンなので Cookie の送信も既定のままでよい。
+- **401 を受けたらログイン画面へ遷移するインターセプタを1本置く。** `ProblemAuthenticationEntryPoint`（8 節）により、未認証時はリダイレクトではなく 401 + Problem Details JSON が返る。SPA としてはこれが正しい挙動なので、遷移の判断はフロント側の責務になる。
+- **エラー表示は Problem Details の形（`title` / `detail` / `errors`）を前提にしてよい。** 8 節のとおり、フィルタ層で出る 401/403 も同じ形に揃えてある。
+
+### ビルドの統合
+
+React のビルド成果物を `static/` へ入れる方法（Gradle から `npm run build` を叩くか、CI で成果物を配置するか）は**認証の設計とは独立**なので、ここでは決めない。開発中は Vite dev server を使うため、この統合が無くても支障は無い。
+
+---
+
+## 13. 実装順
 
 1. 依存追加（security / session-data-redis）+ `SecurityConfig`（全エンドポイントを一旦保護して動作確認）
 2. `V1__create_users.sql` + `User` + `Role` + `UserMapper`（インターフェース + XML）
@@ -408,8 +518,9 @@ GenericContainer<?> redisContainer() {
 6. ユーザー登録 + ドメイン許可リスト
 7. レート制限（Redis）
 8. パスワード変更 + 管理者によるパスワード再発行
-9. CSRF 設定とフロントとの疎通
+9. CSRF 設定 + 静的リソースの `permitAll` + Vite proxy 越しのログイン疎通（**12 節の2つの設定を両方入れないと通らない**）
 10. ロールベースの認可、その後で予約側の所有者チェック
+11. SPA フォールバックと React ビルドの `static/` への配置（本番構成の確認）
 
 各段階で `@WithMockUser` を使ったテストを足していけば、Testcontainers の MySQL に対して実際のマイグレーションごと検証できる。Mapper 単体は `@MybatisTest` でも試せるが、**`UserMapper.xml` の SELECT 句とスキーマのずれは起動時に検出されない**ため、実際にクエリを走らせるテストを1本は置くこと。
 
