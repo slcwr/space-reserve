@@ -64,6 +64,29 @@ Gradle キャッシュの所有権調整と依存のウォームアップを行�
 - アプリ: http://localhost:8080 （ヘルスチェックは `/actuator/health`）
 - MySQL: ホストからは `localhost:13306`（user/password ともに `app`、DB は `space_reserve`）
 
+## 整形
+
+Java の整形は [spring-javaformat](https://github.com/spring-io/spring-javaformat) に任せる。
+Spring Boot 本体と同じ規約（タブ4・120桁・import 順）で、設定項目は持たない。
+
+```bash
+./gradlew format       # 整形する
+./gradlew checkFormat  # 崩れていないか検査する（check に紐づくので test でも走る）
+```
+
+**コメントは整形のたびに幅いっぱいまで詰め直される。** 日本語も1文字を1桁として数えるため、
+手で折り返しても次の `format` で1行にまとめられる。1文1行で書き、読点で改行しないこと。
+
+VS Code で保存時に整形したい場合は公式拡張を入れる。Marketplace には無く、VSIX を
+Maven Central から取ってきて拡張パネルの「Install from VSIX」で選ぶ。
+
+```bash
+curl -LO https://repo1.maven.org/maven2/io/spring/javaformat/spring-javaformat-vscode-extension/0.0.48/spring-javaformat-vscode-extension-0.0.48.vsix
+```
+
+`devcontainer.json` で `java.format.enabled` を `false` にしてあるのは、Java 拡張の
+既定フォーマッタ（スペース4）と競合させないため。
+
 ## 構成上の注意点
 
 **Testcontainers の接続先** — Dev Container はホストの Docker socket を借りているため、

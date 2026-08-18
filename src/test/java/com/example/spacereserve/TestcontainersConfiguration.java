@@ -17,9 +17,9 @@ class TestcontainersConfiguration {
 	}
 
 	/**
-	 * Testcontainers 2.x に Redis 専用モジュールは無いため、コアの
-	 * {@code GenericContainer} を使う。{@code MySQLContainer} と違い型から接続の種類を
-	 * 推論できないので、{@code @ServiceConnection} にサービス名を明示する必要がある。
+	 * Testcontainers 2.x に Redis 専用モジュールは無いため、コアの {@code GenericContainer}
+	 * を使う。{@code MySQLContainer} と違い型から接続の種類を 推論できないので、{@code @ServiceConnection}
+	 * にサービス名を明示する必要がある。
 	 */
 	@Bean
 	@ServiceConnection("redis")

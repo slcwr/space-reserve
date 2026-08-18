@@ -2,6 +2,10 @@ plugins {
 	java
 	id("org.springframework.boot") version "4.1.0"
 	id("io.spring.dependency-management") version "1.1.7"
+	// 整形は Spring Boot 本体と同じ spring-javaformat に揃える。設定項目は持たず、
+	// タブ4・120桁・import 順が規約として固定される。`./gradlew format` で整形し、
+	// `checkFormat` が check に紐づくので崩れたままコミットしても test で気づける。
+	id("io.spring.javaformat") version "0.0.48"
 }
 
 group = "com.example"

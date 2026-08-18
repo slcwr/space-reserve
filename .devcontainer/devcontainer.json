@@ -28,7 +28,10 @@
       ],
       "settings": {
         "java.configuration.updateBuildConfiguration": "automatic",
-        "java.import.gradle.wrapper.enabled": true
+        "java.import.gradle.wrapper.enabled": true,
+        // 整形は spring-javaformat に一本化する。Java 拡張の既定フォーマッタ（スペース4）を
+        // 有効なままにすると、保存のたびに ./gradlew format と食い違う。
+        "java.format.enabled": false
       }
     }
   },

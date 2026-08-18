@@ -13,8 +13,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 /**
  * 業務例外を RFC 9457 の Problem Details に翻訳する。
  *
- * <p>個々の Controller で try-catch を書かずに済ませるための集約点。
- * ここで捕まえていない例外は Spring の既定処理により 500 になる。
+ * <p>
+ * 個々の Controller で try-catch を書かずに済ませるための集約点。 ここで捕まえていない例外は Spring の既定処理により 500 になる。
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -27,8 +27,7 @@ public class GlobalExceptionHandler {
 	}
 
 	/**
-	 * {@code @Valid} の違反を、項目名をキーにしたマップとして返す。
-	 * 既定の応答は違反内容が文章に埋もれるため、クライアントが項目単位で扱えるようにしている。
+	 * {@code @Valid} の違反を、項目名をキーにしたマップとして返す。 既定の応答は違反内容が文章に埋もれるため、クライアントが項目単位で扱えるようにしている。
 	 */
 	@ExceptionHandler(MethodArgumentNotValidException.class)
 	ProblemDetail handleValidationFailure(MethodArgumentNotValidException ex) {

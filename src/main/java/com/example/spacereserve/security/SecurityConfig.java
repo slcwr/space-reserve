@@ -19,8 +19,7 @@ import org.springframework.security.web.authentication.logout.HttpStatusReturnin
 /**
  * Spring Security の入口。フィルタチェーンとパスワードエンコーダを組み立てる。
  *
- * 認証はセッション（Cookie）方式で、クライアントは同一オリジンで配信する React。
- * CSRF は有効。
+ * 認証はセッション（Cookie）方式で、クライアントは同一オリジンで配信する React。 CSRF は有効。
  */
 @Configuration
 @EnableWebSecurity
@@ -28,31 +27,31 @@ public class SecurityConfig {
 
 	@Bean
 	SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-		http
-			.authorizeHttpRequests(auth -> auth
-				.requestMatchers("/", "/index.html", "/favicon.ico", "/assets/**").permitAll()
-				.requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
-				.requestMatchers(HttpMethod.POST, "/api/auth/login", "/api/users").permitAll()
-				.requestMatchers("/api/admin/**").hasRole("ADMIN")
-				.anyRequest().authenticated())
+		http.authorizeHttpRequests(auth -> auth.requestMatchers("/", "/index.html", "/favicon.ico", "/assets/**")
+			.permitAll()
+			.requestMatchers("/actuator/health", "/actuator/health/**")
+			.permitAll()
+			.requestMatchers(HttpMethod.POST, "/api/auth/login", "/api/users")
+			.permitAll()
+			.requestMatchers("/api/admin/**")
+			.hasRole("ADMIN")
+			.anyRequest()
+			.authenticated())
 
 			.csrf(CsrfConfigurer::spa)
 			.formLogin(FormLoginConfigurer::disable)
 			.httpBasic(HttpBasicConfigurer::disable)
 			.requestCache(RequestCacheConfigurer::disable)
-			.logout(logout -> logout
-				.logoutUrl("/logout")
+			.logout(logout -> logout.logoutUrl("/logout")
 				.logoutSuccessHandler(new HttpStatusReturningLogoutSuccessHandler(HttpStatus.NO_CONTENT)))
-			.exceptionHandling(ex -> ex
-				.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)));
+			.exceptionHandling(ex -> ex.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)));
 
 		return http.build();
 	}
 
 	/**
-	 * BCryptPasswordEncoder を直接返さない。DelegatingPasswordEncoder はハッシュに
-	 * {@code {bcrypt}} を前置して保存するため、後から Argon2 へ移る際に既存ハッシュと
-	 * 同一カラムで共存させられる。直接指定すると移行時に全員へ再設定を強いることになる。
+	 * BCryptPasswordEncoder を直接返さない。DelegatingPasswordEncoder はハッシュに {@code {bcrypt}}
+	 * を前置して保存するため、後から Argon2 へ移る際に既存ハッシュと 同一カラムで共存させられる。直接指定すると移行時に全員へ再設定を強いることになる。
 	 */
 	@Bean
 	PasswordEncoder passwordEncoder() {
