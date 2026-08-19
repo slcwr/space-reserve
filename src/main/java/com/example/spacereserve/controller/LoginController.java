@@ -10,9 +10,11 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.web.bind.annotation.*;
+import com.example.spacereserve.dto.request.LoginRequest;
+import com.example.spacereserve.dto.response.UserResponse;
+import com.example.spacereserve.security.AppUserDetails;
 
 /**
  * ログイン認証を担当するコントローラ。 構成: セッション方式(サーバー側でログイン状態を保持) + REST(JSONを返す)。 ログアウトは Spring Security
@@ -24,13 +26,15 @@ public class LoginController {
 
 	private final AuthenticationManager authenticationManager;
 
-	private final SecurityContextRepository securityContextRepository = new HttpSessionSecurityContextRepository();
+	private final SecurityContextRepository securityContextRepository;
 
-	private LoginController(AuthenticationManager authenticationManager) {
+	private LoginController(AuthenticationManager authenticationManager,
+			SecurityContextRepository securityContextRepository) {
 		this.authenticationManager = authenticationManager;
+		this.securityContextRepository = securityContextRepository;
 	}
 
-	@PostMapping("/api/auth/login")
+	@PostMapping("/login")
 	public UserResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpRequest,
 			HttpServletResponse httpResponse) {
 		Authentication auth = authenticationManager

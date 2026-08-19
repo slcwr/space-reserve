@@ -15,6 +15,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.logout.HttpStatusReturningLogoutSuccessHandler;
+import org.springframework.security.web.context.DelegatingSecurityContextRepository;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextRepository;
 
 /**
  * Spring Security の入口。フィルタチェーンとパスワードエンコーダを組み立てる。
@@ -26,7 +30,8 @@ import org.springframework.security.web.authentication.logout.HttpStatusReturnin
 public class SecurityConfig {
 
 	@Bean
-	SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+	SecurityFilterChain securityFilterChain(HttpSecurity http, SecurityContextRepository securityContextRepository)
+			throws Exception {
 		http.authorizeHttpRequests(auth -> auth.requestMatchers("/", "/index.html", "/favicon.ico", "/assets/**")
 			.permitAll()
 			.requestMatchers("/actuator/health", "/actuator/health/**")
@@ -44,9 +49,24 @@ public class SecurityConfig {
 			.requestCache(RequestCacheConfigurer::disable)
 			.logout(logout -> logout.logoutUrl("/logout")
 				.logoutSuccessHandler(new HttpStatusReturningLogoutSuccessHandler(HttpStatus.NO_CONTENT)))
+			// ログインは Controller が自分で saveContext を呼ぶ。フィルタチェーンが読む先と
+			// Controller が書く先を同じインスタンスに揃えるため、既定と同じ構成の Bean を明示的に渡す。
+			.securityContext(context -> context.securityContextRepository(securityContextRepository))
+
 			.exceptionHandling(ex -> ex.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)));
 
 		return http.build();
+	}
+
+	/**
+	 * ログインに formLogin を使わないため、`SecurityContext` の保存は Controller の責務になる（authentication.md
+	 * 4 節）。 Spring Security は既定ではこれを Bean として公開せずフィルタチェーンの内側に隠すので、Controller から注入できるよう
+	 * 既定と同じ構成のものを明示的に立てる。
+	 */
+	@Bean
+	SecurityContextRepository securityContextRepository() {
+		return new DelegatingSecurityContextRepository(new RequestAttributeSecurityContextRepository(),
+				new HttpSessionSecurityContextRepository());
 	}
 
 	/**
