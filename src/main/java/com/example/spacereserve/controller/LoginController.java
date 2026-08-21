@@ -4,12 +4,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.session.ChangeSessionIdAuthenticationStrategy;
+import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.web.bind.annotation.*;
 import com.example.spacereserve.dto.request.LoginRequest;
@@ -28,6 +29,8 @@ public class LoginController {
 
 	private final SecurityContextRepository securityContextRepository;
 
+	private final SessionAuthenticationStrategy sessionAuthenticationStrategy = new ChangeSessionIdAuthenticationStrategy();
+
 	private LoginController(AuthenticationManager authenticationManager,
 			SecurityContextRepository securityContextRepository) {
 		this.authenticationManager = authenticationManager;
@@ -39,8 +42,7 @@ public class LoginController {
 			HttpServletResponse httpResponse) {
 		Authentication auth = authenticationManager
 			.authenticate(UsernamePasswordAuthenticationToken.unauthenticated(request.email(), request.password()));
-		// セッション固定攻撃対策。認証成功時に必ずセッション ID を振り直す。
-		httpRequest.changeSessionId();
+		this.sessionAuthenticationStrategy.onAuthentication(auth, httpRequest, httpResponse);
 		SecurityContext context = SecurityContextHolder.createEmptyContext();
 		context.setAuthentication(auth);
 		SecurityContextHolder.setContext(context);

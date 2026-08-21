@@ -3,21 +3,28 @@ package com.example.spacereserve.exception;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.security.authentication.InternalAuthenticationServiceException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 
 /**
- * 業務例外を RFC 9457 の Problem Details に翻訳する。
- *
- * <p>
- * 個々の Controller で try-catch を書かずに済ませるための集約点。 ここで捕まえていない例外は Spring の既定処理により 500 になる。
+ * 業務例外
  */
+@Order(Ordered.HIGHEST_PRECEDENCE)
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+	private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
 	@ExceptionHandler(ResourceNotFoundException.class)
 	ProblemDetail handleResourceNotFound(ResourceNotFoundException ex) {
@@ -41,6 +48,23 @@ public class GlobalExceptionHandler {
 		problem.setTitle("Validation failed");
 		problem.setDetail("リクエストの内容に誤りがあります。");
 		problem.setProperty("errors", errors);
+		return problem;
+	}
+
+	@ExceptionHandler(AuthenticationException.class)
+	ProblemDetail handleAuthenticationFailure(AuthenticationException ex) {
+		ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
+		problem.setTitle("Authentication failed");
+		problem.setDetail("メールアドレスまたはパスワードが違います。");
+		return problem;
+	}
+
+	@ExceptionHandler(InternalAuthenticationServiceException.class)
+	ProblemDetail handleAuthenticationServiceFailure(InternalAuthenticationServiceException ex) {
+		logger.error("認証処理に失敗しました", ex);
+		ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+		problem.setTitle("Internal server error");
+		problem.setDetail("処理に失敗しました。時間をおいて再度お試しください。");
 		return problem;
 	}
 

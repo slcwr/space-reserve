@@ -4,12 +4,18 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.AccountStatusUserDetailsChecker;
+import org.springframework.security.authentication.AuthenticationEventPublisher;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.ProviderManager;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
 import org.springframework.security.config.annotation.web.configurers.FormLoginConfigurer;
 import org.springframework.security.config.annotation.web.configurers.HttpBasicConfigurer;
 import org.springframework.security.config.annotation.web.configurers.RequestCacheConfigurer;
+import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
@@ -42,17 +48,17 @@ public class SecurityConfig {
 			.hasRole("ADMIN")
 			.anyRequest()
 			.authenticated())
-
 			.csrf(CsrfConfigurer::spa)
 			.formLogin(FormLoginConfigurer::disable)
 			.httpBasic(HttpBasicConfigurer::disable)
 			.requestCache(RequestCacheConfigurer::disable)
-			.logout(logout -> logout.logoutUrl("/logout")
+			.logout(logout -> logout.logoutUrl("/api/auth/logout")
 				.logoutSuccessHandler(new HttpStatusReturningLogoutSuccessHandler(HttpStatus.NO_CONTENT)))
 			// ログインは Controller が自分で saveContext を呼ぶ。フィルタチェーンが読む先と
 			// Controller が書く先を同じインスタンスに揃えるため、既定と同じ構成の Bean を明示的に渡す。
 			.securityContext(context -> context.securityContextRepository(securityContextRepository))
-
+			// 未認証は 401 を返すだけにする。既定はログイン画面へリダイレクトするため SPA では使えない。
+			// 403 は既定のハンドラ（/error 経由）に任せる。
 			.exceptionHandling(ex -> ex.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)));
 
 		return http.build();
@@ -76,6 +82,21 @@ public class SecurityConfig {
 	@Bean
 	PasswordEncoder passwordEncoder() {
 		return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+	}
+
+	@Bean
+	AuthenticationManager authenticationManager(UserDetailsService userDetailsService, PasswordEncoder passwordEncoder,
+			AuthenticationEventPublisher eventPublisher) {
+		DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
+		provider.setPasswordEncoder(passwordEncoder);
+		// 有効性チェックをパスワード照合の後ろへ移す（authentication.md 4 節）。
+		// 既定の順序のままだと、パスワードが違っても「無効です」と返りアドレスの存在が漏れる。
+		provider.setPreAuthenticationChecks(userDetails -> {
+		});
+		provider.setPostAuthenticationChecks(new AccountStatusUserDetailsChecker());
+		ProviderManager manager = new ProviderManager(provider);
+		manager.setAuthenticationEventPublisher(eventPublisher);
+		return manager;
 	}
 
 }

@@ -218,7 +218,7 @@ sequenceDiagram
 
 ## 6. 401 / 403 の2経路
 
-同じステータスでも、**どこで発生したかで通る道が違う**。ここを揃えないと Problem Details に統一したはずの応答が崩れる。
+同じステータスでも、**どこで発生したかで通る道が違う**。フィルタ層のものは Problem Details にならない。
 
 ```mermaid
 flowchart TD
@@ -228,8 +228,8 @@ flowchart TD
     Q -->|Controller / Service| DSP["DispatcherServlet 内部"]
 
     FT --> Q2{認証済みか}
-    Q2 -->|未認証| EP["ProblemAuthenticationEntryPoint<br/>→ 401"]
-    Q2 -->|認証済み・権限不足| ADH["ProblemAccessDeniedHandler<br/>→ 403"]
+    Q2 -->|未認証| EP["HttpStatusEntryPoint<br/>→ 401 ボディ無し"]
+    Q2 -->|認証済み・権限不足| ADH["AccessDeniedHandlerImpl<br/>→ /error → 403"]
 
     DSP --> GEH["@RestControllerAdvice<br/>GlobalExceptionHandler"]
     GEH --> R1["BadCredentialsException → 401"]
@@ -237,9 +237,9 @@ flowchart TD
     GEH --> R3["DuplicateEmailException → 409"]
     GEH --> R4["ForbiddenOperationException → 403"]
 
-    EP --> OUT([RFC 9457 Problem Details])
-    ADH --> OUT
-    R1 --> OUT
+    EP --> OUT2([ボディ無し])
+    ADH --> OUT3([Boot 既定形式])
+    R1 --> OUT([RFC 9457 Problem Details])
     R2 --> OUT
     R3 --> OUT
     R4 --> OUT
@@ -248,7 +248,7 @@ flowchart TD
     style GEH fill:#1e3a5f,color:#fff
 ```
 
-**`@RestControllerAdvice` はフィルタ層に届かない。** 保護リソースへの未認証アクセスは DispatcherServlet の手前で弾かれるため、`ProblemAuthenticationEntryPoint` / `ProblemAccessDeniedHandler` を書かないと 401/403 だけ Spring 既定の形式で返る。
+**`@RestControllerAdvice` はフィルタ層に届かない。** 保護リソースへの未認証アクセスは DispatcherServlet の手前で弾かれるため、フィルタ層の 401/403 だけ応答形式が揃わない。Spring Security の標準ハンドラに Problem Details を返すものは無く、揃えるには自前の `AuthenticationEntryPoint` / `AccessDeniedHandler` が要る。**当面は書かない**（判断と引き受けたリスクは [authentication.md](authentication.md) 8 節）。
 
 ---
 

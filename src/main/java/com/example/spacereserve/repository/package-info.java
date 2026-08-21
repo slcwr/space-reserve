@@ -4,14 +4,21 @@
  * クラス名は XxxMapper、Mapper 注釈を付けたインターフェースとして定義し、 実装クラスは書かない（MyBatis が実行時に生成する）。層としての役割は JPA
  * を使う場合と 同じなので、パッケージ名は repository のままにしてある。
  *
- * SQL はインターフェースに書かない。Select などの注釈は使わず、すべて src/main/resources/mapper/XxxMapper.xml
- * に置く。インターフェースはメソッド シグネチャだけを持つ。理由は次の3つ。
+ * SQL の置き場は、長さではなく構造で決める。
  *
- * - 注釈と XML が混在すると「この SQL はどちらにあるか」を毎回探すことになる。 単純なものは注釈、という線引きは運用のうちに必ず崩れる。
+ * - 単一テーブルに対する素直な1文（静的な SELECT / INSERT / UPDATE / DELETE）は Select などの注釈でインターフェースに書く。
  *
- * - 動的 SQL（if, foreach）と resultMap は XML でしかまともに書けない。 後から XML へ引っ越す手間を最初から省く。
+ * - 動的 SQL（if, foreach）、結合、association や明示的な resultMap が要るものは
+ * src/main/resources/mapper/XxxMapper.xml に置く。これらは注釈では script 文字列や SelectProvider
+ * を経由することになり、XML より読めなくなる。
  *
- * - SQL が .xml に集まっていれば、実行される SQL の全量をファイル検索で把握できる。
+ * 行数で線を引かないこと。列が1本増えただけで引っ越し対象が変わり、判断が揺れる。 「XML でしか素直に書けないか」で切れば、迷う場面がほとんど無くなる。
+ *
+ * 混在する以上、SQL の全量を追うには2箇所を見ることになる。注釈側は repository パッケージへの Select|Insert|Update|Delete の
+ * grep、XML 側は resources/mapper 配下の全ファイルで、どちらも機械的に列挙できる状態を保つこと。
+ *
+ * 同じメソッドを注釈と XML の両方に書かないこと。起動時に「Mapped Statements collection already contains value for
+ * ...」で失敗する。XML へ移すときは注釈を消す。
  *
  * XML の namespace は Mapper インターフェースの完全修飾名と一致させる。ずれると 起動時ではなくそのメソッドを呼んだ時点で
  * BindingException になる。

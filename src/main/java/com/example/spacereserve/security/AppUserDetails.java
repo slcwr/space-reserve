@@ -83,11 +83,6 @@ public final class AppUserDetails implements UserDetails {
 		return this.email;
 	}
 
-	/**
-	 * 既定実装が true を返すため、退職者・停止アカウントを弾くにはこの override が必須。 チェックがパスワード照合の後ろで走るよう、
-	 * AppUserDetailsService 側で postAuthenticationChecks に
-	 * 移すこと。既定の順序のままだと、パスワードが違っても「無効です」と返り アドレスの存在が漏れる（authentication.md 4 節）。
-	 */
 	@Override
 	public boolean isEnabled() {
 		return this.enabled;

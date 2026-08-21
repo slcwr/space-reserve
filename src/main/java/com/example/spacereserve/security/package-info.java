@@ -12,7 +12,7 @@
  *
  * <p>
  * 置くもの: SecurityConfig（フィルタチェーンと PasswordEncoder）、
- * AppUserDetails、AppUserDetailsService、401/403 を Problem Details に変換するハンドラ。 詳細は
- * docs/design/authentication.md の 7 節。
+ * AppUserDetails、AppUserDetailsService。フィルタ層の 401/403 は標準ハンドラに任せており、 応答形式が Controller
+ * 由来のものと揃わない（理由は authentication.md 8 節）。 詳細は docs/design/authentication.md の 7 節。
  */
 package com.example.spacereserve.security;

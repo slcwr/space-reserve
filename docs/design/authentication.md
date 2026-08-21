@@ -260,9 +260,7 @@ com.example.spacereserve
 └── security/         ★新規
     ├── SecurityConfig                    SecurityFilterChain, PasswordEncoder
     ├── AppUserDetails                    UserDetails 実装（userId を保持、Serializable）
-    ├── AppUserDetailsService             UserDetailsService 実装
-    ├── ProblemAuthenticationEntryPoint   401 → ProblemDetail
-    └── ProblemAccessDeniedHandler        403 → ProblemDetail
+    └── AppUserDetailsService             UserDetailsService 実装
 ```
 
 `config/` に混ぜず分けるのは、これらが業務ロジックでも単なる設定でもなく、**Spring Security という特定フレームワークへの適合層**だから。独立させておけば、認証方式を JWT や OIDC に変えるときの変更範囲がこのパッケージにほぼ閉じる。
@@ -273,18 +271,29 @@ com.example.spacereserve
 
 ## 8. エラー応答
 
-エラー応答は既存方針どおり RFC 9457 の Problem Details に統一する。**認証・認可の失敗は例外の発生場所によって処理経路が2つに分かれる**点に注意。
+Controller から先のエラー応答は RFC 9457 の Problem Details に統一する。**ただし認証・認可の失敗は例外の発生場所によって処理経路が分かれ、フィルタ層のものは Problem Details にならない**点に注意。
 
-| 例外・事象 | 発生場所 | 処理 | ステータス |
-|---|---|---|---|
-| `BadCredentialsException` | ログイン Controller 内 | `GlobalExceptionHandler` | 401 |
-| `TooManyAttemptsException`（自作） | ログイン Service 内 | `GlobalExceptionHandler` | 429 |
-| `DuplicateEmailException`（自作） | 登録 Service 内 | `GlobalExceptionHandler` | 409 |
-| `ForbiddenOperationException`（自作） | 各 Service の所有者チェック | `GlobalExceptionHandler` | 403 |
-| 未認証で保護リソースへアクセス | `ExceptionTranslationFilter` | `AuthenticationEntryPoint` | 401 |
-| ロール不足（`/api/admin/**` 等） | 同上 | `AccessDeniedHandler` | 403 |
+| 例外・事象 | 発生場所 | 処理 | ステータス | 応答の形 |
+|---|---|---|---|---|
+| `BadCredentialsException` | ログイン Controller 内 | `GlobalExceptionHandler` | 401 | Problem Details |
+| `InternalAuthenticationServiceException` | 同上 | `GlobalExceptionHandler` | 500 | Problem Details |
+| `TooManyAttemptsException`（自作） | ログイン Service 内 | `GlobalExceptionHandler` | 429 | Problem Details |
+| `DuplicateEmailException`（自作） | 登録 Service 内 | `GlobalExceptionHandler` | 409 | Problem Details |
+| `ForbiddenOperationException`（自作） | 各 Service の所有者チェック | `GlobalExceptionHandler` | 403 | Problem Details |
+| 未認証で保護リソースへアクセス | `ExceptionTranslationFilter` | `HttpStatusEntryPoint` | 401 | **ボディ無し** |
+| ロール不足（`/api/admin/**` 等） | 同上 | `AccessDeniedHandlerImpl` → `/error` | 403 | **Boot 既定形式** |
+| CSRF トークン不正・欠落 | `CsrfFilter` | 同上 | 403 | **Boot 既定形式** |
 
-**フィルタ層の 401/403 は `GlobalExceptionHandler` を通らない。** `@RestControllerAdvice` は DispatcherServlet 内部の例外しか拾えないが、保護リソースへの未認証アクセスはその手前のサーブレットフィルタで弾かれる。放置すると、Problem Details に統一したはずの応答のうち 401/403 だけが Spring 既定の別形式で返る。`security/` に置く `ProblemAuthenticationEntryPoint` / `ProblemAccessDeniedHandler` はこれを揃えるためのもので、省略できない。
+**フィルタ層の 401/403 は `GlobalExceptionHandler` を通らない。** `@RestControllerAdvice` は DispatcherServlet 内部の例外しか拾えないが、保護リソースへの未認証アクセスはその手前のサーブレットフィルタで弾かれるため。
+
+Spring Security の標準ハンドラに Problem Details を書き出すものは存在せず、揃えるには自前の `AuthenticationEntryPoint` / `AccessDeniedHandler` を書くしかない。**当面は書かず、形式が分かれることを受け入れる。** 表示文言はフロントが持つ方針であり、サーバから返す `detail` を UI に使わないなら、フィルタ層でボディを組み立てる価値が薄いため。実測値は次のとおり。
+
+```
+401  Content-Type 無し、ボディ空
+403  {"timestamp":"...","status":403,"error":"Forbidden","path":"/api/admin/users"}
+```
+
+**引き受けたリスク。** フロントはエラー応答を4通り（`errors` 付き / `detail` 付き / Boot 既定形式 / ボディ無し）で扱うことになる。特に 401 はボディが無いため、ステータス以外の手掛かりが無い。CSRF 切れ（再送で回復する）とロール不足（回復しない）も 403 で同じ形になり区別できない。ここが実際に困り始めたら、自前ハンドラを入れて `code` のような機械可読キーを持たせる方向で見直す。
 
 **所有者チェックには Spring の `AccessDeniedException` を使わず自作例外を投げる。** `AccessDeniedException` を `@RestControllerAdvice` で捕まえると、`ExceptionTranslationFilter` が持つ「未認証ユーザーなら 403 ではなく 401 を返してログインへ誘導する」という分岐を横取りしてしまい、未ログイン時の挙動が壊れる。層ごとに例外の種類を分けておけばこの衝突が起きない。
 
@@ -499,8 +508,9 @@ Spring Security の既定はサーバサイドレンダリングの画面を前�
 ### フロント側の約束
 
 - **HTTP クライアントは `axios` を使う。** `XSRF-TOKEN` Cookie を読んで `X-XSRF-TOKEN` ヘッダに載せる処理を既定で持っている。`fetch` だと毎回自前で書くことになる。同一オリジンなので Cookie の送信も既定のままでよい。
-- **401 を受けたらログイン画面へ遷移するインターセプタを1本置く。** `ProblemAuthenticationEntryPoint`（8 節）により、未認証時はリダイレクトではなく 401 + Problem Details JSON が返る。SPA としてはこれが正しい挙動なので、遷移の判断はフロント側の責務になる。
-- **エラー表示は Problem Details の形（`title` / `detail` / `errors`）を前提にしてよい。** 8 節のとおり、フィルタ層で出る 401/403 も同じ形に揃えてある。
+- **401 を受けたらログイン画面へ遷移するインターセプタを1本置く。** `HttpStatusEntryPoint`（8 節）により、未認証時はリダイレクトではなく 401 が返る。SPA としてはこれが正しい挙動なので、遷移の判断はフロント側の責務になる。
+- **エラー表示の文言はフロントが持つ。** サーバの `detail` は開発者向けの説明とみなし、そのまま画面に出さない。i18n と文言調整をサーバのデプロイから切り離すため。
+- **Controller 由来のエラーは Problem Details の形（`title` / `detail` / `errors`）を前提にしてよい。** ただし 8 節のとおり、フィルタ層で出る 401 はボディが無く、403 は Boot 既定形式になる。この2つだけは別扱いが要る。
 
 ### ビルドの統合
 
@@ -514,7 +524,7 @@ React のビルド成果物を `static/` へ入れる方法（Gradle から `npm
 2. `V1__create_users.sql` + `User` + `Role` + `UserMapper`（インターフェース + XML）
 3. `AppUserDetails` + `AppUserDetailsService`（**`enabled` チェック順の入れ替え込み**）
 4. `/api/auth/login` `/logout` `/me` + Spring Session / Redis の疎通確認
-5. 401/403 の Problem Details 化（**忘れやすいので独立ステップにする**）
+5. ~~401/403 の Problem Details 化~~（見送り。理由は 8 節）
 6. ユーザー登録 + ドメイン許可リスト
 7. レート制限（Redis）
 8. パスワード変更 + 管理者によるパスワード再発行
