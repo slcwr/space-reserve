@@ -11,7 +11,6 @@ import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
 import org.springframework.security.config.annotation.web.configurers.FormLoginConfigurer;
 import org.springframework.security.config.annotation.web.configurers.HttpBasicConfigurer;
 import org.springframework.security.config.annotation.web.configurers.RequestCacheConfigurer;
@@ -25,6 +24,8 @@ import org.springframework.security.web.context.DelegatingSecurityContextReposit
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRepository;
 
 /**
  * Spring Security の入口。フィルタチェーンとパスワードエンコーダを組み立てる。
@@ -36,8 +37,8 @@ import org.springframework.security.web.context.SecurityContextRepository;
 public class SecurityConfig {
 
 	@Bean
-	SecurityFilterChain securityFilterChain(HttpSecurity http, SecurityContextRepository securityContextRepository)
-			throws Exception {
+	SecurityFilterChain securityFilterChain(HttpSecurity http, SecurityContextRepository securityContextRepository,
+			CsrfTokenRepository csrfTokenRepository) throws Exception {
 		http.authorizeHttpRequests(auth -> auth.requestMatchers("/", "/index.html", "/favicon.ico", "/assets/**")
 			.permitAll()
 			.requestMatchers("/actuator/health", "/actuator/health/**")
@@ -48,7 +49,10 @@ public class SecurityConfig {
 			.hasRole("ADMIN")
 			.anyRequest()
 			.authenticated())
-			.csrf(CsrfConfigurer::spa)
+			// spa() は CookieCsrfTokenRepository と SpaCsrfTokenRequestHandler を代入するだけなので、
+			// 後から csrfTokenRepository() を繋ぐとリポジトリだけが差し替わり、BREACH 対策の
+			// ハンドラは残る。Controller がログイン時のトークン更新に同じ実体を要るため Bean 経由にする。
+			.csrf(csrf -> csrf.spa().csrfTokenRepository(csrfTokenRepository))
 			.formLogin(FormLoginConfigurer::disable)
 			.httpBasic(HttpBasicConfigurer::disable)
 			.requestCache(RequestCacheConfigurer::disable)
@@ -73,6 +77,16 @@ public class SecurityConfig {
 	SecurityContextRepository securityContextRepository() {
 		return new DelegatingSecurityContextRepository(new RequestAttributeSecurityContextRepository(),
 				new HttpSessionSecurityContextRepository());
+	}
+
+	/**
+	 * `spa()` が内部で生成するものと同一構成。Bean にするのは、ログイン成功時に CSRF トークンを 更新する
+	 * `CsrfAuthenticationStrategy`（LoginController）へ、フィルタチェーンが読むのと
+	 * 同じ実体を渡す必要があるため。別実体だと更新したトークンが照合側に反映されない。
+	 */
+	@Bean
+	CsrfTokenRepository csrfTokenRepository() {
+		return CookieCsrfTokenRepository.withHttpOnlyFalse();
 	}
 
 	/**
