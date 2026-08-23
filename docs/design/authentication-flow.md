@@ -73,58 +73,62 @@ flowchart TD
 
 ## 3. ログイン
 
+**この節は実装済みの挙動を示す**（他の節は着手前の設計のまま）。対応する実装は
+[`LoginController`](../../src/main/java/com/example/spacereserve/controller/LoginController.java) と
+[`SecurityConfig`](../../src/main/java/com/example/spacereserve/security/SecurityConfig.java)、
+実行可能な形での記録は
+[`LoginControllerTests`](../../src/test/java/com/example/spacereserve/controller/LoginControllerTests.java)。
+
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as クライアント
-    participant Ctl as AuthController
-    participant RL as レート制限<br/>(Redis)
-    participant AM as AuthenticationManager
+    participant C as クライアント<br/>(React / axios)
+    participant CF as CsrfFilter
+    participant Ctl as LoginController
+    participant AM as AuthenticationManager<br/>(ProviderManager)
     participant DAO as DaoAuthenticationProvider
     participant UDS as AppUserDetailsService
     participant DB as MySQL
-    participant Enc as PasswordEncoder
+    participant SAS as SessionAuthenticationStrategy<br/>(Composite)
     participant Repo as SecurityContextRepository
     participant RS as Redis (session)
 
-    C->>Ctl: POST /api/auth/login {email, password}
-    Ctl->>RL: INCR login:fail:{emailHash}:{ip} を確認
-    alt 閾値超過
-        RL-->>Ctl: 制限中
-        Ctl-->>C: 429 Problem Details
-    else 通過
-        Ctl->>AM: authenticate(unauthenticated token)
-        AM->>DAO: 委譲
-        Note over DAO: preAuthenticationChecks は<br/>空実装に差し替え済み
-        DAO->>UDS: loadUserByUsername(email)
-        UDS->>DB: SELECT * FROM users WHERE email = ?
-        alt ユーザーなし
-            DB-->>UDS: 0 件
-            UDS-->>DAO: UsernameNotFoundException
-            Note over DAO: hideUserNotFoundExceptions=true
+    C->>CF: POST /api/auth/login {email, password}<br/>Cookie: XSRF-TOKEN=t1<br/>Header: X-XSRF-TOKEN: t1
+    Note over CF: permitAll は CSRF の免除ではない。<br/>トークンが無ければここで 403
+    CF->>Ctl: 通過（@Valid 違反ならこの後 400）
+
+    Ctl->>AM: authenticate(unauthenticated(email, password))
+    AM->>DAO: 委譲
+    Note over DAO: preAuthenticationChecks は空実装に差し替え済み
+    DAO->>UDS: loadUserByUsername(email)
+    UDS->>DB: SELECT ... FROM users WHERE email = ?
+    alt ユーザーなし
+        DB-->>UDS: 0 件
+        UDS-->>DAO: UsernameNotFoundException
+        Note over DAO: hideUserNotFoundExceptions=true。<br/>ダミーハッシュに照合を走らせ応答時間差も消す
+        DAO-->>Ctl: BadCredentialsException
+    else ユーザーあり
+        DB-->>UDS: User 行
+        UDS-->>DAO: AppUserDetails
+        DAO->>DAO: passwordEncoder.matches(raw, {bcrypt}hash)
+        alt 不一致
             DAO-->>Ctl: BadCredentialsException
-        else ユーザーあり
-            DB-->>UDS: User 行
-            UDS-->>DAO: AppUserDetails
-            DAO->>Enc: matches(raw, {bcrypt}hash)
-            alt 不一致
-                Enc-->>DAO: false
-                DAO-->>Ctl: BadCredentialsException
-            else 一致
-                Note over DAO: ここで初めて postAuthenticationChecks<br/>= enabled / locked を判定
-                DAO-->>Ctl: Authentication (認証済み)
-            end
+        else 一致
+            Note over DAO: ここで初めて postAuthenticationChecks<br/>= enabled / locked を判定
+            DAO-->>Ctl: Authentication（認証済み）
         end
-        alt 認証成功
-            Ctl->>Ctl: changeSessionId()<br/>セッション固定攻撃対策
-            Ctl->>Repo: saveContext(context, req, res)
-            Repo->>RS: SecurityContext をシリアライズして保存
-            Ctl->>RL: 失敗カウントを削除
-            Ctl-->>C: 200 UserResponse + Set-Cookie: SESSION
-        else 失敗
-            Ctl->>RL: INCR + EXPIRE 15m
-            Ctl-->>C: 401 Problem Details（文言は共通）
-        end
+    end
+
+    alt 認証失敗
+        Note over Ctl: GlobalExceptionHandler が捕捉
+        Ctl-->>C: 401 Problem Details（文言は共通）
+    else 認証成功
+        Ctl->>SAS: onAuthentication(auth, req, res)
+        SAS->>RS: changeSessionId()<br/>セッション固定攻撃対策
+        Note over SAS: CsrfAuthenticationStrategy が<br/>旧トークンを削除し新トークンを発行
+        Ctl->>Repo: saveContext(context, req, res)
+        Repo->>RS: SecurityContext をシリアライズして保存
+        Ctl-->>C: 200 UserResponse<br/>Set-Cookie: SESSION, XSRF-TOKEN=t2
     end
 ```
 
@@ -133,6 +137,23 @@ sequenceDiagram
 - **`saveContext` を自分で呼ぶ。** `formLogin` を使わない代償。忘れるとログインは 200 で返るのに、次のリクエストが 401 になる。
 - **`enabled` の判定はパスワード照合の後。** 既定の順序のままだと、パスワードが違っても「無効なアカウント」と返ってアドレスの存在が漏れる。
 - **失敗系の応答はすべて同じ形。** 「存在しない」と「パスワード違い」を区別しない。
+- **振り直すのはセッション ID と CSRF トークンの2つ。** `formLogin` なら `CompositeSessionAuthenticationStrategy` が `ChangeSessionIdAuthenticationStrategy` と `CsrfAuthenticationStrategy` の両方を回す。自前ログインでは片方だけ書いて終わりがちで、CSRF トークンを据え置くと、攻撃者が事前に固定したトークンが認証済みセッションに対してそのまま通る。
+
+### `CsrfAuthenticationStrategy` の遅延解決（実装で踏んだ罠）
+
+トークンの入れ替えは「消す」と「配る」の2段で、**消す方はその場で走るが、配る方は予約されるだけ**で、誰かが値を取りに来て初めて実行される。この「取りに来る」役は一緒に渡すリクエストハンドラが担う。
+
+既定の `CsrfTokenRequestAttributeHandler` は `csrfRequestAttributeName` が非 null（既定 `"_csrf"`）のとき取りに行かない。そのまま渡すと**削除だけが応答に乗り、新しいトークンが発行されない**。ログイン直後のクライアントはトークンを持たない状態になり、次の POST が 403 になる。振り直さない場合より悪い。
+
+`spa()` がフィルタ側に施しているのと同じく `setCsrfRequestAttributeName(null)` を入れて毎回解決させる。authentication.md 12 節の「遅延読み込みの解除」と同じ話が、フィルタ側とログイン側の2箇所に出てくると理解すればよい。
+
+### まだ入っていないもの
+
+図はレート制限を含まない。**未実装**のため（設計は authentication.md 9 節）。入れる場合は `authenticate()` の前に確認、失敗時に `INCR + EXPIRE`、成功時に削除、超過時は 429 を挟む。
+
+ログイン失敗のログ出力も無い。レート制限の閾値を決める材料が取れないので、実装するならこの2つは同時に入れるのが自然。
+
+`AuthenticationEventPublisher` は `ProviderManager` に配線済みだが購読者がいないため、現時点では何も起きない（将来の受け口）。
 
 ---
 
@@ -189,7 +210,7 @@ sequenceDiagram
     participant Ctl as Controller
 
     Note over C,Repo: 初回 GET — Cookie を発行させる
-    C->>CF: GET /api/me
+    C->>CF: GET /api/auth/me
     CF->>H: トークンを解決
     Note over H: 既定は遅延解決。<br/>setCsrfRequestAttributeName(null) で<br/>毎回解決させる
     H->>Repo: 生成して保存
@@ -212,7 +233,9 @@ sequenceDiagram
 
 罠サイトはクロスオリジンのため **Cookie は自動送信できてもその値を JS から読んでヘッダに載せることができない**。この非対称性が防御の本体。したがってフロントは「Cookie を読んでヘッダに詰め直す」実装が必須になる（`axios` は既定でこれを行う）。
 
-**Spring Security 側の設定を2つとも入れないと、この図の1つ目のやりとりが成立しない。** `withHttpOnlyFalse()` が無ければ JS が Cookie を読めず、遅延解決を解除しなければそもそも `Set-Cookie` が飛ばない。実装では両方をまとめた `csrf(CsrfConfigurer::spa)` を使っている。どちらを落としても「ログイン画面は出るのに POST だけ 403」という同じ症状になる。詳細は authentication.md 12 節。
+**Spring Security 側の設定を2つとも入れないと、この図の1つ目のやりとりが成立しない。** `withHttpOnlyFalse()` が無ければ JS が Cookie を読めず、遅延解決を解除しなければそもそも `Set-Cookie` が飛ばない。実装では両方をまとめた `csrf(CsrfConfigurer::spa)` を使い、`CsrfTokenRepository` だけ Bean として外に出している（ログイン時の振り直しに同じ実体が要るため。3 節）。どちらを落としても「ログイン画面は出るのに POST だけ 403」という同じ症状になる。詳細は authentication.md 12 節。
+
+**1つ目のやりとりを `/api/auth/me` が兼ねる。** `CsrfFilter` は `AuthorizationFilter` より上流なので、未ログインで 401 になる場合でも `Set-Cookie: XSRF-TOKEN` は返る。開発では `GET /` を Vite が返して Spring を通らないため、この口を1回叩かないと最初のログイン POST が 403 になる。ログイン成功時にトークンは新しい値へ振り直される（3 節）。
 
 ---
 
@@ -322,7 +345,7 @@ sequenceDiagram
     participant LF as LogoutFilter
     participant RS as Redis
 
-    C->>LF: POST /logout（+ CSRF ヘッダ）
+    C->>LF: POST /api/auth/logout（+ CSRF ヘッダ）
     LF->>RS: セッション削除
     LF->>LF: SecurityContextHolder.clearContext()
     LF-->>C: 204 + Cookie 失効
