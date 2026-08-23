@@ -18,6 +18,7 @@ import org.springframework.security.web.authentication.session.SessionAuthentica
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CsrfAuthenticationStrategy;
 import org.springframework.security.web.csrf.CsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.web.bind.annotation.*;
 import com.example.spacereserve.dto.request.LoginRequest;
 import com.example.spacereserve.dto.response.UserResponse;
@@ -44,8 +45,16 @@ public class LoginController {
 		// 認証成功時に振り直すのはセッション ID だけでは足りない。CSRF トークンを据え置くと、
 		// 攻撃者が事前に固定したトークンがログイン後もそのまま通る。formLogin を使う場合に
 		// Spring Security が既定で組む2本と同じ構成を、ここで自前で作る。
-		this.sessionAuthenticationStrategy = new CompositeSessionAuthenticationStrategy(List
-			.of(new ChangeSessionIdAuthenticationStrategy(), new CsrfAuthenticationStrategy(csrfTokenRepository)));
+		this.sessionAuthenticationStrategy = new CompositeSessionAuthenticationStrategy(
+				List.of(new ChangeSessionIdAuthenticationStrategy(), csrfAuthenticationStrategy(csrfTokenRepository)));
+	}
+
+	private static CsrfAuthenticationStrategy csrfAuthenticationStrategy(CsrfTokenRepository csrfTokenRepository) {
+		CsrfTokenRequestAttributeHandler requestHandler = new CsrfTokenRequestAttributeHandler();
+		requestHandler.setCsrfRequestAttributeName(null);
+		CsrfAuthenticationStrategy strategy = new CsrfAuthenticationStrategy(csrfTokenRepository);
+		strategy.setRequestHandler(requestHandler);
+		return strategy;
 	}
 
 	@PostMapping("/login")
