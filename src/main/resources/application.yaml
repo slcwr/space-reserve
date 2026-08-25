@@ -13,10 +13,14 @@ spring:
       port: 6379
   session:
     timeout: 30m
-    redis:
-      # 後で Redis をキャッシュ等と共用したときにキーが混ざらないよう名前空間を切る。
-      namespace: space-reserve:session
-      flush-mode: on_save
+    # Boot 4.0 で spring.session.redis.* は spring.session.data.redis.* へ移った。
+    # 旧名を書いても解決されず黙って無視される（エラーも警告も出ない）ため、
+    # namespace が既定の spring:session に戻っていることに気づけない。
+    data:
+      redis:
+        # 後で Redis をキャッシュ等と共用したときにキーが混ざらないよう名前空間を切る。
+        namespace: space-reserve:session
+        flush-mode: on-save
   mvc:
     problemdetails:
       # エラー応答を RFC 9457 (application/problem+json) に統一する。

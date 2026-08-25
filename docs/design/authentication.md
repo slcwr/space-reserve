@@ -43,12 +43,15 @@ spring:
       port: 6379
   session:
     timeout: 30m
-    redis:
-      namespace: space-reserve:session
-      flush-mode: on_save
+    data:                    # Boot 4.0 で spring.session.redis.* から移動
+      redis:
+        namespace: space-reserve:session
+        flush-mode: on-save
 ```
 
 `namespace` は明示する。後で Redis をキャッシュやレートリミットと共有したときにキーが混ざらないようにするため。
+
+**プロパティの位置に注意。** Boot 4.0 で `spring.session.redis.*` は `spring.session.data.redis.*` へ移った（メタデータ上の deprecation level は `error`）。旧名を書いても解決されず**黙って無視される**ため、エラーも警告も出ないまま `namespace` が既定の `spring:session` に戻る。`redis-cli KEYS` を叩くまで気づけない類なので、`RedisSessionNamespaceTests` が実際のキーで固定している。接続先の `spring.data.redis.*` と `spring.session.timeout` は Boot 4 でもそのまま。
 
 Compose 側は `--appendonly yes` で永続化する。これを外すと Redis コンテナの再起動でセッションが飛び、導入目的の半分が消える。
 
