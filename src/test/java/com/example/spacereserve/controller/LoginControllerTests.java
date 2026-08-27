@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -54,6 +55,9 @@ class LoginControllerTests {
 	@Autowired
 	private PasswordEncoder passwordEncoder;
 
+	@Autowired
+	private StringRedisTemplate redis;
+
 	@BeforeEach
 	void insertUser() {
 		this.jdbcTemplate.update("DELETE FROM users");
@@ -61,6 +65,9 @@ class LoginControllerTests {
 				INSERT INTO users (email, password_hash, display_name, role, enabled, created_at, updated_at)
 				VALUES (?, ?, ?, 'USER', TRUE, NOW(6), NOW(6))
 				""", EMAIL, this.passwordEncoder.encode(PASSWORD), DISPLAY_NAME);
+		// ログインの応答がレート制限の状態に依存するようになったため、他のテストの
+		// 失敗ぶんを持ち越さない。残っていると正しい資格情報でも 429 になる。
+		LoginRateLimitTests.clearFailureCounts(this.redis);
 	}
 
 	/**

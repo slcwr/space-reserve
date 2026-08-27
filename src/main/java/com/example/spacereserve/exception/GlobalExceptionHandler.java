@@ -51,6 +51,17 @@ public class GlobalExceptionHandler {
 		return problem;
 	}
 
+	/**
+	 * どのアカウントが制限中かを漏らさないよう、文言は一般的なものに留める。残り時間も返さない （authentication.md 9 節）。
+	 */
+	@ExceptionHandler(TooManyAttemptsException.class)
+	ProblemDetail handleTooManyAttempts(TooManyAttemptsException ex) {
+		ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.TOO_MANY_REQUESTS);
+		problem.setTitle("Too many attempts");
+		problem.setDetail("試行回数が上限に達しました。しばらく時間をおいて再度お試しください。");
+		return problem;
+	}
+
 	@ExceptionHandler(AuthenticationException.class)
 	ProblemDetail handleAuthenticationFailure(AuthenticationException ex) {
 		ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);

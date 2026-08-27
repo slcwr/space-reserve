@@ -85,6 +85,7 @@ sequenceDiagram
     participant C as クライアント<br/>(React / axios)
     participant CF as CsrfFilter
     participant Ctl as LoginController
+    participant RL as LoginAttemptService<br/>(Redis)
     participant AM as AuthenticationManager<br/>(ProviderManager)
     participant DAO as DaoAuthenticationProvider
     participant UDS as AppUserDetailsService
@@ -96,6 +97,13 @@ sequenceDiagram
     C->>CF: POST /api/auth/login {email, password}<br/>Cookie: XSRF-TOKEN=t1<br/>Header: X-XSRF-TOKEN: t1
     Note over CF: permitAll は CSRF の免除ではない。<br/>トークンが無ければここで 403
     CF->>Ctl: 通過（@Valid 違反ならこの後 400）
+
+    Ctl->>RL: verifyNotBlocked(email, ip)
+    Note over RL: GET space-reserve:login:fail:{emailHash}:{ip}
+    alt 閾値超過
+        RL-->>Ctl: TooManyAttemptsException
+        Ctl-->>C: 429 Problem Details（文言は共通）
+    end
 
     Ctl->>AM: authenticate(unauthenticated(email, password))
     AM->>DAO: 委譲
@@ -120,9 +128,12 @@ sequenceDiagram
     end
 
     alt 認証失敗
+        Ctl->>RL: recordFailure(email, ip)
+        Note over RL: INCR + EXPIRE 15m（WARN でログ出力）
         Note over Ctl: GlobalExceptionHandler が捕捉
         Ctl-->>C: 401 Problem Details（文言は共通）
     else 認証成功
+        Ctl->>RL: reset(email, ip)
         Ctl->>SAS: onAuthentication(auth, req, res)
         SAS->>RS: changeSessionId()<br/>セッション固定攻撃対策
         Note over SAS: CsrfAuthenticationStrategy が<br/>旧トークンを削除し新トークンを発行
@@ -147,13 +158,25 @@ sequenceDiagram
 
 `spa()` がフィルタ側に施しているのと同じく `setCsrfRequestAttributeName(null)` を入れて毎回解決させる。authentication.md 12 節の「遅延読み込みの解除」と同じ話が、フィルタ側とログイン側の2箇所に出てくると理解すればよい。
 
+### レート制限（9 節の実装）
+
+**アカウントロックではない。** 鍵は「メールアドレスのハッシュ + 送信元 IP」の組で、締め出されるのは攻撃元の IP に限られる。正規の利用者が別の IP から入る経路は残る。
+
+判定を `authenticate()` の**前**に置いているのが要点。後ろに回すと、拒否すべき試行でも BCrypt が回り、計算コストを攻撃者に明け渡すことになる。`LoginRateLimitTests` が「閾値超過後は正しいパスワードでも 429」を確かめているのは、この順序が保たれていることの裏付けでもある。
+
+実装で効いている細部が3つ。
+
+- **メールアドレスは小文字化してからハッシュする。** `users.email` の照合順序 `utf8mb4_0900_ai_ci` は大文字小文字を区別せず `TARO@` でもログインできるため、正規化しないと大文字を混ぜるだけで別の鍵になり、制限をすり抜けられる。
+- **TTL は失敗のたびに入れ直す。** 初回だけ設定する書き方だと、閾値ぶんの試行を窓ごとに繰り返せる。
+- **`InternalAuthenticationServiceException` は数えない。** 資格情報の誤りではないため、これを数えると DB 断などの障害中のリトライで正規の利用者が締め出される。
+
+閾値と期間は `app.login.rate-limit.*` から `LoginRateLimitProperties` で受ける。
+
 ### まだ入っていないもの
 
-図はレート制限を含まない。**未実装**のため（設計は authentication.md 9 節）。入れる場合は `authenticate()` の前に確認、失敗時に `INCR + EXPIRE`、成功時に削除、超過時は 429 を挟む。
+`AuthenticationEventPublisher` は `ProviderManager` に配線済みだが購読者がいないため、現時点では何も起きない（将来の受け口）。レート制限は Controller 側で明示的に呼んでおり、イベントには依存していない。
 
-ログイン失敗のログ出力も無い。レート制限の閾値を決める材料が取れないので、実装するならこの2つは同時に入れるのが自然。
-
-`AuthenticationEventPublisher` は `ProviderManager` に配線済みだが購読者がいないため、現時点では何も起きない（将来の受け口）。
+登録スパムの IP レート制限（9 節）は未実装。`LoginAttemptService` と同じ `INCR + EXPIRE` の仕組みを、別の鍵で使い回す形になる。
 
 ---
 

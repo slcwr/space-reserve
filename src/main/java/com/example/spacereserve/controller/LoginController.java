@@ -7,8 +7,10 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.InternalAuthenticationServiceException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.*;
 import com.example.spacereserve.dto.request.LoginRequest;
 import com.example.spacereserve.dto.response.UserResponse;
 import com.example.spacereserve.security.AppUserDetails;
+import com.example.spacereserve.service.LoginAttemptService;
 
 /**
  * ログイン認証を担当するコントローラ。 構成: セッション方式(サーバー側でログイン状態を保持) + REST(JSONを返す)。 ログアウトは Spring Security
@@ -38,10 +41,14 @@ public class LoginController {
 
 	private final SessionAuthenticationStrategy sessionAuthenticationStrategy;
 
+	private final LoginAttemptService loginAttemptService;
+
 	private LoginController(AuthenticationManager authenticationManager,
-			SecurityContextRepository securityContextRepository, CsrfTokenRepository csrfTokenRepository) {
+			SecurityContextRepository securityContextRepository, CsrfTokenRepository csrfTokenRepository,
+			LoginAttemptService loginAttemptService) {
 		this.authenticationManager = authenticationManager;
 		this.securityContextRepository = securityContextRepository;
+		this.loginAttemptService = loginAttemptService;
 		// 認証成功時に振り直すのはセッション ID だけでは足りない。CSRF トークンを据え置くと、
 		// 攻撃者が事前に固定したトークンがログイン後もそのまま通る。formLogin を使う場合に
 		// Spring Security が既定で組む2本と同じ構成を、ここで自前で作る。
@@ -60,14 +67,39 @@ public class LoginController {
 	@PostMapping("/login")
 	public UserResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpRequest,
 			HttpServletResponse httpResponse) {
-		Authentication auth = authenticationManager
-			.authenticate(UsernamePasswordAuthenticationToken.unauthenticated(request.email(), request.password()));
+		// 送信元 IP はここで取り出し、Service へは String で渡す。Service に HttpServletRequest を
+		// 持ち込むと HTTP から独立させるという層の約束が崩れる（service/package-info.java）。
+		String clientIp = httpRequest.getRemoteAddr();
+		this.loginAttemptService.verifyNotBlocked(request.email(), clientIp);
+		Authentication auth = authenticate(request, clientIp);
 		this.sessionAuthenticationStrategy.onAuthentication(auth, httpRequest, httpResponse);
 		SecurityContext context = SecurityContextHolder.createEmptyContext();
 		context.setAuthentication(auth);
 		SecurityContextHolder.setContext(context);
 		securityContextRepository.saveContext(context, httpRequest, httpResponse);
 		return UserResponse.from((AppUserDetails) auth.getPrincipal());
+	}
+
+	/**
+	 * 認証し、その結果で試行回数を更新する。
+	 *
+	 * `InternalAuthenticationServiceException`（DB 断など）は数えない。資格情報の誤りではないため、
+	 * これを数えると障害中のリトライで正規の利用者が締め出される。
+	 */
+	private Authentication authenticate(LoginRequest request, String clientIp) {
+		Authentication auth;
+		try {
+			auth = this.authenticationManager
+				.authenticate(UsernamePasswordAuthenticationToken.unauthenticated(request.email(), request.password()));
+		}
+		catch (AuthenticationException ex) {
+			if (!(ex instanceof InternalAuthenticationServiceException)) {
+				this.loginAttemptService.recordFailure(request.email(), clientIp);
+			}
+			throw ex;
+		}
+		this.loginAttemptService.reset(request.email(), clientIp);
+		return auth;
 	}
 
 	/**

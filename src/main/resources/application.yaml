@@ -39,3 +39,12 @@ management:
     web:
       exposure:
         include: health,info
+
+app:
+  login:
+    rate-limit:
+      # 「メールアドレス + 送信元 IP」ごとの上限。アカウントロックではないため、
+      # 締め出されるのは攻撃元の IP に限られる（authentication.md 9 節）。
+      threshold: 10
+      # 最後の失敗からこの時間で数え直す。
+      window: 15m
