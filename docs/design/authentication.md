@@ -370,7 +370,7 @@ testImplementation("org.springframework.boot:spring-boot-starter-session-data-re
 
 いずれも Boot 4.1 の BOM で管理されているためバージョン指定は不要（BOM の実物で確認済み）。ORM に使う `mybatis-spring-boot-starter` はサードパーティのため BOM の外にあり、こちらだけはバージョンを明記する（`build.gradle.kts` を参照）。Boot 3 系では Redis セッションに `spring-boot-starter-data-redis` と `spring-session-data-redis` の2本が要ったが、4.1 では `spring-boot-starter-session-data-redis` 1本にまとまっている。`build.gradle.kts` の既存コメントが指摘しているとおり、Boot 4 では自動設定が技術ごとのモジュールに分かれているので、必ず starter を経由すること。
 
-メール送信を行わないため `spring-boot-starter-mail` は入れない。`src/main/resources/templates/` も用途が無い（サーバ側で HTML を組み立てないため）。`static/` は React のビルド成果物の置き場として使う（12 節）。
+メール送信を行わないため `spring-boot-starter-mail` は入れない。`backend/src/main/resources/templates/` も用途が無い（サーバ側で HTML を組み立てないため）。`static/` は React のビルド成果物の置き場として使う（12 節）。
 
 ### Compose に追加するサービス
 
@@ -421,7 +421,7 @@ GenericContainer<?> redisContainer() {
 
 ```
 frontend/                       React + Vite（リポジトリ直下）
-  └─ dist/  ─── ビルド ───→  src/main/resources/static/
+  └─ dist/  ─── ビルド ───→  backend/src/main/resources/static/
 ```
 
 | | 開発 | 本番 |

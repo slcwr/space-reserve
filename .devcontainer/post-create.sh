@@ -8,6 +8,13 @@ echo "==> docker access check"
 docker version --format '{{.Server.Version}}'
 
 echo "==> warming up Gradle"
-./gradlew --no-daemon compileJava
+# wrapper は backend/ の中にある。ルートに Gradle のファイルは置いていない。
+(cd backend && ./gradlew --no-daemon compileJava)
 
-echo "==> ready. './gradlew bootRun' for compose MySQL, './gradlew bootTestRun' for Testcontainers."
+echo "==> installing frontend dependencies"
+# node_modules はイメージにもボリュームにも残らないため、作成のたびに入れ直す。
+npm --prefix frontend install
+
+echo "==> ready."
+echo "    backend:  cd backend && ./gradlew bootRun   (bootTestRun for Testcontainers)"
+echo "    frontend: npm --prefix frontend run dev     (needs bootRun for /api)"

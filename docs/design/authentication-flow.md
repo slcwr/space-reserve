@@ -74,10 +74,10 @@ flowchart TD
 ## 3. ログイン
 
 **この節は実装済みの挙動を示す**（他の節は着手前の設計のまま）。対応する実装は
-[`LoginController`](../../src/main/java/com/example/spacereserve/controller/LoginController.java) と
-[`SecurityConfig`](../../src/main/java/com/example/spacereserve/security/SecurityConfig.java)、
+[`LoginController`](../../backend/src/main/java/com/example/spacereserve/controller/LoginController.java) と
+[`SecurityConfig`](../../backend/src/main/java/com/example/spacereserve/security/SecurityConfig.java)、
 実行可能な形での記録は
-[`LoginControllerTests`](../../src/test/java/com/example/spacereserve/controller/LoginControllerTests.java)。
+[`LoginControllerTests`](../../backend/src/test/java/com/example/spacereserve/controller/LoginControllerTests.java)。
 
 ```mermaid
 sequenceDiagram

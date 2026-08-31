@@ -15,6 +15,11 @@
     // trixie には moby-cli パッケージが無いため、本家 Docker CE CLI を使う。
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       "moby": false
+    },
+    // frontend/ のビルドと Vite dev server 用。ベースイメージには nvm だけが入っていて
+    // Node 本体は無いため、これを外すと npm が見つからない。
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
     }
   },
 
@@ -36,9 +41,10 @@
     }
   },
 
-  "forwardPorts": ["8080", "db:3306"],
+  "forwardPorts": ["8080", "5173", "db:3306"],
   "portsAttributes": {
     "8080": { "label": "app" },
+    "5173": { "label": "vite" },
     "db:3306": { "label": "mysql" }
   },
 

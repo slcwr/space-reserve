@@ -1,0 +1,73 @@
+/* 素の見た目を最低限整えるだけ。画面固有の装飾は各ドメインの components/ に置く。 */
+
+:root {
+  font-family: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  line-height: 1.6;
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.page-message {
+  padding: 2rem;
+  text-align: center;
+}
+
+.app-layout__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid rgb(128 128 128 / 0.3);
+}
+
+.app-layout__brand {
+  font-weight: 700;
+  text-decoration: none;
+  color: inherit;
+}
+
+.app-layout__account {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.app-layout__main {
+  padding: 1.5rem;
+}
+
+.login-page {
+  max-width: 22rem;
+  margin: 4rem auto;
+  padding: 0 1.5rem;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.login-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.login-form__field input {
+  padding: 0.5rem;
+  font: inherit;
+}
+
+.login-form__error {
+  margin: 0;
+  color: #b3261e;
+}
