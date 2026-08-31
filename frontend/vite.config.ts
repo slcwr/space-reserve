@@ -19,7 +19,7 @@ export default defineConfig({
       '/api': 'http://localhost:8080',
     },
   },
-  // 出力先は既定の dist/ のまま。成果物を backend/src/main/resources/static/ へ入れる手段
+  // 出力先は既定の dist/ のまま。成果物を backend/user/src/main/resources/static/ へ入れる手段
   // （Gradle から npm run build を叩くか、CI で配置するか）は認証の設計とは独立として保留されている
   // （authentication.md 12 節「ビルドの統合」）ので、ここでは決め打ちにしない。
   //

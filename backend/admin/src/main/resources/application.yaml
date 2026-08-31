@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: space-reserve-admin
+  config:
+    import: "classpath:common.yaml"
+
+server:
+  # user アプリ（8080）と同時に立てるため別ポートにする。
+  #
+  # Cookie はポートを区別しないため、同一ホストで動かす開発環境では user アプリで得た
+  # セッション Cookie がこちらにもそのまま送られる。別ホストで運用する場合はこの前提が
+  # 崩れる（AdminSecurityConfig の Javadoc 参照）。
+  port: 8081

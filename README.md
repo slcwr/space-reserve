@@ -23,38 +23,68 @@ Spring Boot 4.1 / Java 21 / Gradle (Kotlin DSL) / MySQL 8.4。
 ```
 space-reserve/
 ├── backend/        Spring Boot。wrapper と settings.gradle.kts もこの中
+│   ├── common/     共有ライブラリ（実行可能 jar は作らない）
+│   ├── user/       利用者向けアプリ（:8080）
+│   └── admin/      管理向けアプリ（:8081）
 ├── frontend/       React + TypeScript + Vite
 ├── docs/design/    設計メモ
 └── .devcontainer/
 ```
 
-**ルートに Gradle のファイルは置いていない。** マルチプロジェクトにせず `backend/` を独立した
-Gradle プロジェクトにしているのは、`frontend/` が独立した npm プロジェクトであるのと対称に
-するため。どちらも自分のディレクトリの中で完結し、ルートは両者を並べるだけの場所になる。
+**リポジトリのルートに Gradle のファイルは置いていない。** `backend/` を独立した Gradle
+プロジェクトにしているのは、`frontend/` が独立した npm プロジェクトであるのと対称にするため。
+どちらも自分のディレクトリの中で完結し、リポジトリのルートは両者を並べるだけの場所になる。
 
-そのため Gradle のコマンドは `backend/` の中で叩く。
+そのため Gradle のコマンドは `backend/` の中で叩く。`backend/` の内側は Gradle の
+マルチプロジェクトになっていて、`common` / `user` / `admin` の3つのサブプロジェクトを持つ。
+
+## バックエンドのモジュール構成
+
+利用者向けと管理向けを別プロセスに分けている。共有部分は `common` に置き、
+`user` と `admin` は互いを知らない。この向きは Gradle の依存宣言が強制する。
+
+```
+common → （何にも依存しない）
+user   → common
+admin  → common
+```
+
+分ける実利は権限の露出を減らせること。`admin` はアプリ全体が `ROLE_ADMIN` を要求するので、
+URL ごとの権限指定を書き漏らしても管理機能が利用者側に出てこない。
 
 ## バックエンドのパッケージ構成
 
-REST API 構成（サーバサイドレンダリングは行わない）で、レイヤ優先に切っている。
-各パッケージの責務と禁止事項は `package-info.java` に書いてあるので、
+REST API 構成（サーバサイドレンダリングは行わない）で、モジュールの内側はレイヤ優先に
+切っている。各パッケージの責務と禁止事項は `package-info.java` に書いてあるので、
 迷ったらそちらを参照する。
 
 ```
 com.example.spacereserve
-├── controller/    HTTP の境界。@RestController
-├── service/       業務ルールとトランザクション境界。@Transactional はここ
-├── repository/    永続化。JpaRepository のインターフェースのみ
-├── domain/        JPA エンティティ、列挙、値オブジェクト
-├── dto/
-│   ├── request/   リクエストボディ。Bean Validation はここ
-│   └── response/  レスポンスボディ。REST におけるビュー
-├── config/        @Configuration 置き場
-└── exception/     業務例外と GlobalExceptionHandler
+├── common/        user と admin の両方が要るものだけを置く
+│   ├── domain/        ドメインモデル。永続化フレームワークを知らない素の Java オブジェクト
+│   ├── repository/    永続化。MyBatis の Mapper インターフェースのみ
+│   ├── service/       業務ルールとトランザクション境界。@Transactional はここ
+│   ├── security/      認証の部品（AppUserDetails、PasswordEncoder など）
+│   ├── config/        @Configuration 置き場
+│   └── exception/     業務例外と GlobalExceptionHandler
+├── user/          利用者向けアプリ
+│   ├── controller/    HTTP の境界。@RestController
+│   ├── service/       このアプリ固有の業務ルール
+│   ├── security/      認可ルール（SecurityFilterChain）
+│   └── dto/
+│       ├── request/   リクエストボディ。Bean Validation はここ
+│       └── response/  レスポンスボディ。REST におけるビュー
+└── admin/         管理向けアプリ。構成は user と同じ
 ```
 
 依存の向きは `controller → service → repository` の一方向。逆流させない。
-エンティティは `service` と `repository` の内側に閉じ、`controller` は DTO しか扱わない。
+ドメインモデルは `service` と `repository` の内側に閉じ、`controller` は DTO しか扱わない。
+
+`common` に上げるかどうかは「両方のアプリが要るか」で決める。「複数箇所から呼ばれているか」で
+決めないこと。後者で判断すると、`user` の都合で書いたものが `admin` にも黙って公開される。
+
+DTO は共有しない。管理画面が見たい項目と利用者に返してよい項目は一致しないため、
+同じ形になったとしても `user.dto` と `admin.dto` に別々に定義する。
 
 エラー応答は RFC 9457 の Problem Details（`application/problem+json`）に統一している。
 独自のエラー DTO は作らず、`ProblemDetail` を使う。
@@ -84,8 +114,12 @@ frontend/src/
 
 ## スキーマ管理
 
-Flyway を使う。マイグレーションは `backend/src/main/resources/db/migration/` に置き、
-規約は同ディレクトリの [README](backend/src/main/resources/db/migration/README.md) を参照。
+Flyway を使う。マイグレーションは `backend/common/src/main/resources/db/migration/` に置き、
+規約は同ディレクトリの [README](backend/common/src/main/resources/db/migration/README.md) を参照。
+
+スキーマは両アプリで共有するので SQL は `common` に置くが、**適用するのは `user` アプリだけ**。
+Flyway の依存を `user` にしか入れていないのがその実装で、両方が起動時にマイグレーションを
+走らせるとロック待ちや競合が起きるため、適用主体を1つに絞っている。
 
 `spring.jpa.hibernate.ddl-auto` は `validate` にしてあるため、エンティティと
 スキーマがずれるとアプリが起動しない。エンティティを追加・変更したら、
@@ -98,10 +132,14 @@ Gradle キャッシュの所有権調整と依存のウォームアップを行�
 
 ```bash
 cd backend
-./gradlew bootRun       # Compose の MySQL に接続して起動
-./gradlew bootTestRun   # Testcontainers の MySQL を立てて起動
-./gradlew test          # Testcontainers を使ってテスト
+./gradlew :user:bootRun       # 利用者向けアプリ。Compose の MySQL に接続して起動
+./gradlew :admin:bootRun      # 管理向けアプリ（:8081）
+./gradlew :user:bootTestRun   # Testcontainers の MySQL を立てて起動
+./gradlew test                # 全モジュールのテスト。Testcontainers を使う
 ```
+
+マルチプロジェクトになったので `bootRun` はモジュールを指定する（`:user:bootRun`）。
+指定せずに `./gradlew bootRun` と叩くと `user` と `admin` の両方が起動しようとする。
 
 ```bash
 npm --prefix frontend run dev   # Vite dev server
@@ -111,7 +149,8 @@ npm --prefix frontend run dev   # Vite dev server
 （`:5173`）で、`/api` はそこから `:8080` へ中継される。ブラウザから見たオリジンを1つに保つ
 ためで、これにより CORS 設定は開発・本番のどちらでも要らない。
 
-- アプリ: http://localhost:8080 （ヘルスチェックは `/actuator/health`）
+- 利用者向けアプリ: http://localhost:8080 （ヘルスチェックは `/actuator/health`）
+- 管理向けアプリ: http://localhost:8081 （同上）
 - 画面（開発時）: http://localhost:5173
 - MySQL: ホストからは `localhost:13306`（user/password ともに `app`、DB は `space_reserve`）
 

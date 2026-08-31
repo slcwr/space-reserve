@@ -31,7 +31,7 @@ npm run dev        # http://localhost:5173
 **バックエンドを別に起動しておくこと。** `/api` は Vite の proxy が `:8080` へ中継する。
 
 ```bash
-cd backend && ./gradlew bootRun
+cd backend && ./gradlew :user:bootRun
 ```
 
 proxy を挟むのは、ブラウザから見たオリジンを開発でも1つに保つため。これにより CORS 設定は
@@ -44,7 +44,7 @@ npm run lint       # oxlint
 
 ## ビルド成果物の配置
 
-本番は Spring が `backend/src/main/resources/static/` から配信する。**`dist/` をそこへ入れる手段
+本番は Spring が `backend/user/src/main/resources/static/` から配信する。**`dist/` をそこへ入れる手段
 （Gradle から `npm run build` を叩くか、CI で配置するか）はまだ決めていない**
 （authentication.md 12 節「ビルドの統合」）。開発中は Vite dev server を使うため、この統合が
 無くても支障は無い。

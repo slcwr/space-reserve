@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: space-reserve-user
+  # DB / Redis / セッション / MyBatis の設定は common モジュールの jar から取り込む。
+  # ここに書いた値の方が優先されるので、上書きしたい項目はこのファイルに書けばよい。
+  config:
+    import: "classpath:common.yaml"
+
+server:
+  # フロントの Vite proxy がこのポートへ中継する（frontend/vite.config.ts）。
+  port: 8080
